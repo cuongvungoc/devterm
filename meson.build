@@ -1,0 +1,11 @@
+project('devterm', 'c', version: '0.1.0', default_options: ['c_std=c11', 'warning_level=2'])
+
+gtk = dependency('gtk4', version: '>=4.10')
+vte = dependency('vte-2.91-gtk4', version: '>=0.70')
+json = dependency('json-glib-1.0', version: '>=1.6')
+gio = dependency('gio-2.0')
+
+src = files('src/commands.c')
+executable('devterm', ['src/main.c', 'src/pane.c', src], dependencies: [gtk, vte, json, gio], install: true)
+test_exe = executable('test-commands', ['tests/test-commands.c', src], dependencies: [json, gio])
+test('commands', test_exe)
