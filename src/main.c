@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "split-layout.h"
+#include "text-export.h"
 #include <gtk/gtk.h>
 #include <string.h>
 
@@ -15,6 +16,8 @@ struct TerminalTab {
 };
 struct App {
     GtkWidget *window, *workspace, *notebook, *quick_bar, *status, *manage_dialog, *manage_rows;
+    GtkWidget *export_button;
+    GCancellable *export_cancel;
     GPtrArray *tabs;
     TerminalTab *active_tab;
     guint next_tab_id, focus_idle;
@@ -214,6 +217,95 @@ static void action_find_in_pane(GSimpleAction *action, GVariant *parameter, gpoi
     TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
     if (pane) pane_search_open(pane);
     else status(app, "Select a terminal pane to search");
+}
+static void on_copy_all(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
+    GError *error = NULL;
+    if (pane_copy_all_text(pane, &error)) status(app, "All retained pane text copied to clipboard");
+    else { status(app, error->message); g_clear_error(&error); }
+    schedule_focus(app);
+}
+/* A request owns its snapshot rather than a pane/tab pointer. Hold the
+ * application until cancellation/worker cleanup finishes even after closing
+ * the last window, so a temporary export is never abandoned during shutdown. */
+typedef struct { GtkWidget *window; GtkApplication *application; GBytes *text; } ExportRequest;
+static void export_complete(ExportRequest *request, const char *message) {
+    App *app = g_object_get_data(G_OBJECT(request->window), "app");
+    if (app && !app->shutting_down) {
+        g_clear_object(&app->export_cancel);
+        gtk_widget_set_sensitive(app->export_button, TRUE);
+        status(app, message);
+        schedule_focus(app);
+    }
+    g_bytes_unref(request->text);
+    g_object_unref(request->window);
+    g_application_release(G_APPLICATION(request->application));
+    g_object_unref(request->application);
+    g_free(request);
+}
+static void on_export_written(GObject *source, GAsyncResult *result, gpointer data) {
+    ExportRequest *request = data;
+    GError *error = NULL;
+    gboolean ok = text_export_finish(G_FILE(source), result, &error);
+    char *path = g_file_get_parse_name(G_FILE(source));
+    char *message = ok ? g_strdup_printf("Terminal text saved to %s", path) :
+                        g_strdup_printf("Export failed: %s", error->message);
+    export_complete(request, message);
+    g_free(path); g_free(message); g_clear_error(&error);
+}
+static void on_export_destination(GObject *source, GAsyncResult *result, gpointer data) {
+    ExportRequest *request = data;
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, &error);
+    App *app = g_object_get_data(G_OBJECT(request->window), "app");
+    if (!app || app->shutting_down || !file) {
+        gboolean cancelled = !error || g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED) ||
+            g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_CANCELLED) ||
+            g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+        char *message = cancelled ? g_strdup("Export cancelled") : g_strdup_printf("Cannot select export file: %s", error->message);
+        export_complete(request, message);
+        g_free(message); g_clear_error(&error); g_clear_object(&file);
+        return;
+    }
+    status(app, "Saving terminal text…");
+    text_export_async(file, request->text, app->export_cancel, on_export_written, request);
+    g_object_unref(file);
+}
+static void on_export_text(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    if (app->shutting_down || app->export_cancel) return;
+    TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
+    GError *error = NULL;
+    GBytes *text = pane_snapshot_text(pane, &error);
+    if (!text) { status(app, error->message); g_clear_error(&error); return; }
+    ExportRequest *request = g_new0(ExportRequest, 1);
+    request->text = text;
+    request->window = g_object_ref(app->window);
+    request->application = g_object_ref(gtk_window_get_application(GTK_WINDOW(app->window)));
+    g_application_hold(G_APPLICATION(request->application));
+    app->export_cancel = g_cancellable_new();
+    gtk_widget_set_sensitive(app->export_button, FALSE);
+    status(app, "Pane text captured. Choose where to save it.");
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Export Pane Text");
+    gtk_file_dialog_set_modal(dialog, TRUE);
+    GDateTime *now = g_date_time_new_now_local();
+    char *name = g_date_time_format(now, "devterm-%Y%m%d-%H%M%S.txt");
+    gtk_file_dialog_set_initial_name(dialog, name);
+    g_free(name); g_date_time_unref(now);
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Text files (*.txt)");
+    gtk_file_filter_add_pattern(filter, "*.txt");
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_list_store_append(filters, filter);
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+    gtk_file_dialog_set_default_filter(dialog, filter);
+    g_object_unref(filter); g_object_unref(filters);
+    gtk_file_dialog_save(dialog, GTK_WINDOW(app->window), app->export_cancel, on_export_destination, request);
+    g_object_unref(dialog);
 }
 static void action_cycle_tab(GSimpleAction *action, GVariant *parameter, gpointer data) {
     (void)parameter;
@@ -430,6 +522,7 @@ static void on_window_destroy(GtkWidget *window, gpointer data) {
     App *app = data;
     if (app->shutting_down) return;
     app->shutting_down = TRUE;
+    if (app->export_cancel) g_cancellable_cancel(app->export_cancel);
     app->active_tab = NULL;
     if (app->focus_idle) { g_source_remove(app->focus_idle); app->focus_idle = 0; }
     g_signal_handlers_disconnect_by_data(app->notebook, app);
@@ -447,6 +540,7 @@ static void app_free(gpointer data) {
     if (app->focus_idle) g_source_remove(app->focus_idle);
     g_ptr_array_unref(app->tabs);
     g_ptr_array_unref(app->commands);
+    g_clear_object(&app->export_cancel);
     g_free(app->config_path);
     g_free(app);
 }
@@ -494,6 +588,14 @@ static void activate(GtkApplication *application, gpointer data) {
     gtk_widget_set_tooltip_text(search, "Find in selected pane (Ctrl+Shift+F)");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(search), "win.find-in-pane");
     gtk_box_append(GTK_BOX(tools), search);
+    GtkWidget *copy_all = gtk_button_new_with_label("Copy All Text");
+    gtk_widget_set_tooltip_text(copy_all, "Copy the selected pane's retained text, including scrollback, without colors");
+    g_signal_connect(copy_all, "clicked", G_CALLBACK(on_copy_all), app);
+    gtk_box_append(GTK_BOX(tools), copy_all);
+    app->export_button = gtk_button_new_with_label("Export Text…");
+    gtk_widget_set_tooltip_text(app->export_button, "Save a snapshot of the selected pane's retained text as UTF-8 (.txt)");
+    g_signal_connect(app->export_button, "clicked", G_CALLBACK(on_export_text), app);
+    gtk_box_append(GTK_BOX(tools), app->export_button);
     app->workspace = gtk_stack_new();
     gtk_stack_set_hhomogeneous(GTK_STACK(app->workspace), FALSE);
     gtk_stack_set_vhomogeneous(GTK_STACK(app->workspace), FALSE);

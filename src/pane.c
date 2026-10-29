@@ -339,6 +339,31 @@ void pane_search_open(TerminalPane *p) {
     gtk_editable_select_region(GTK_EDITABLE(p->search_entry), 0, -1);
     if (*gtk_editable_get_text(GTK_EDITABLE(p->search_entry))) search_find(p, FALSE);
 }
+GBytes *pane_snapshot_text(TerminalPane *p, GError **error) {
+    if (!p || p->closed) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_CLOSED, "Select an open terminal pane first");
+        return NULL;
+    }
+    /* This VTE API includes the active buffer's scrollback and joins soft
+     * wraps. Only memory extraction runs on GTK's thread; file I/O must not. */
+    GOutputStream *stream = g_memory_output_stream_new_resizable();
+    gboolean ok = vte_terminal_write_contents_sync(p->terminal, stream, VTE_WRITE_DEFAULT, NULL, error);
+    if (ok) ok = g_output_stream_close(stream, NULL, error);
+    GBytes *text = ok ? g_memory_output_stream_steal_as_bytes(G_MEMORY_OUTPUT_STREAM(stream)) : NULL;
+    g_object_unref(stream);
+    return text;
+}
+gboolean pane_copy_all_text(TerminalPane *p, GError **error) {
+    GBytes *text = pane_snapshot_text(p, error);
+    if (!text) return FALSE;
+    gsize size;
+    const char *data = g_bytes_get_data(text, &size);
+    char *string = size ? g_strndup(data, size) : g_strdup("");
+    gdk_clipboard_set_text(gtk_widget_get_clipboard(p->root), string);
+    g_free(string);
+    g_bytes_unref(text);
+    return TRUE;
+}
 gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && p->running; }
 gboolean pane_has_live_session(TerminalPane *p) { return p && !p->closed && (p->starting || p->running); }
 char *pane_dup_working_directory(TerminalPane *p) {

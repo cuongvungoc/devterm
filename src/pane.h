@@ -10,6 +10,9 @@ GtkWidget *pane_widget(TerminalPane *pane);
 void pane_set_active(TerminalPane *pane, gboolean active);
 void pane_focus(TerminalPane *pane);
 void pane_search_open(TerminalPane *pane);
+/* Snapshot the current screen buffer, including retained scrollback. GTK thread only. */
+GBytes *pane_snapshot_text(TerminalPane *pane, GError **error);
+gboolean pane_copy_all_text(TerminalPane *pane, GError **error);
 gboolean pane_is_running(TerminalPane *pane);
 gboolean pane_has_live_session(TerminalPane *pane);
 char *pane_dup_working_directory(TerminalPane *pane);
