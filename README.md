@@ -8,14 +8,16 @@ Trên Ubuntu 24.04:
 
 ```sh
 sudo apt update
-sudo apt install build-essential meson ninja-build pkg-config libgtk-4-dev libvte-2.91-gtk4-dev libjson-glib-dev libpcre2-dev
+sudo apt install build-essential meson ninja-build pkg-config libgtk-4-dev libvte-2.91-gtk4-dev libjson-glib-dev libpcre2-dev libsecret-1-dev openssh-client inetutils-telnet picocom gnome-keyring
 meson setup build
 meson compile -C build
 meson test -C build --print-errorlogs
 ./build/devterm
 ```
 
-Phiên bản đã kiểm tra: GTK 4.14.5, VTE GTK4 0.76.0, JSON-GLib 1.8.0, Meson 1.3.2. Cần phiên đồ họa X11 hoặc Wayland để mở cửa sổ.
+Phiên bản đã kiểm tra: GTK 4.14.5, VTE GTK4 0.76.0, JSON-GLib 1.8.0, libsecret 0.21.4, OpenSSH 9.6p1, picocom 3.1, Meson 1.3.2. Cần phiên đồ họa X11 hoặc Wayland để mở cửa sổ. Ghi nhớ password cần dịch vụ Secret Service đang hoạt động trong phiên D-Bus của người dùng, ví dụ GNOME Keyring. Thiếu dịch vụ này vẫn có thể nhập password cho từng lần kết nối.
+
+Build tạo hai executable `devterm` và `devterm-connect`; giữ chúng cùng thư mục khi chạy hoặc phân phối. `meson install -C build` cài cả hai. `ssh`, `telnet` và `picocom` chỉ cần khi sử dụng giao thức tương ứng.
 
 Build với dependency trong `/tmp`
 ```bash
@@ -53,7 +55,49 @@ Nếu shell đã thoát hoặc chưa khởi động được, DevTerm báo lỗi
 
 Giới hạn của search trên VTE 0.76: điều hướng trước/sau chỉ chọn một lần xuất hiện trên mỗi dòng logic (một dòng có thể được bọc thành nhiều dòng hiển thị). Nhiều lần xuất hiện trên cùng một dòng không được duyệt riêng. Đây là giới hạn của [bộ tìm kiếm VTE 0.76](https://github.com/GNOME/vte/blob/0.76.0/src/vte.cc#L11157).
 
-## Cấu hình
+## Sessions: SSH, Telnet và Serial
+
+Bấm **Sessions…** trên toolbar để quản lý profile bằng **Add**, **Edit**, **Duplicate**, **Delete**. Chọn profile rồi bấm **Connect**, hoặc double-click profile, để mở một tab mới mang tên profile. Không tự kết nối khi khởi động. Split trong tab remote vẫn tạo shell local độc lập; Quick Commands, Search, Copy All Text và Export Text tiếp tục áp dụng cho pane đang chọn.
+
+- **SSH**: nhập host, port (mặc định 22), username, timeout và chọn xác thực bằng password hoặc key/agent. Password được nhập trong ô che ký tự; **Remember in keyring** là tùy chọn. Key/agent dùng OpenSSH và đường dẫn private key tùy chọn; passphrase của key nên được mở khóa trong `ssh-agent` trước. Lần đầu gặp host, DevTerm hiển thị câu hỏi và fingerprint do OpenSSH cung cấp; kiểm tra fingerprint rồi chọn **Trust Host Key**. Cancel dừng kết nối. Host key thay đổi bị OpenSSH từ chối; ứng dụng không tự bỏ qua kiểm tra hay xóa `known_hosts`. Password chỉ được gửi một lần cho mỗi lần Connect.
+- **Telnet**: nhập host, port (mặc định 23), username nếu cần và bật **Automatic login** để dùng các prompt của profile. Telnet truyền dữ liệu và password không mã hóa trên mạng; chỉ dùng trong môi trường phù hợp. Client chạy ở chế độ 8 bit, tắt local escape và bỏ qua `.telnetrc` để tránh mất byte Unicode hoặc cấu hình trace ngoài ý muốn.
+- **Serial**: chọn đường dẫn thiết bị, ví dụ `/dev/serial/by-id/...`, baud rate, data bits, parity, stop bits và flow control. Tài khoản cần quyền mở cổng, thường qua nhóm `dialout` trên Ubuntu. Có thể bật Automatic login và **Send initial Enter** khi thiết bị cần Enter để hiện login prompt. DevTerm dùng picocom, giữ cơ chế khóa cổng của client và không yêu cầu chạy ứng dụng bằng root.
+
+Với Telnet/Serial, cấu hình regex riêng cho **Username prompt**, **Password prompt** và **Ready prompt**. Có thể để trống Username prompt nếu thiết bị chỉ hỏi password. Ví dụ username `(?i)(login|username)\s*:\s*$`, password `(?i)password\s*:\s*$`, ready `router#\s*$`. Mỗi biểu thức phải khớp phần cuối output; chọn Ready prompt đủ đặc trưng cho thiết bị để tránh nhận nhầm banner là đăng nhập thành công. Engine xử lý prompt bị chia thành nhiều gói và bỏ ANSI khi so khớp.
+
+Trong lúc tự đăng nhập Telnet/Serial, ký tự gõ và Quick Commands được bỏ qua; **Esc/Ctrl+C** hủy. Output của giai đoạn xác thực được giữ ngoài VTE và loại bỏ sau đăng nhập, kể cả khi thiết bị echo lại password, để không lọt vào scrollback, copy hoặc export. Sau thông báo đăng nhập thành công có thể nhấn Enter để hiện lại prompt. Gặp prompt không khớp sẽ chờ đến timeout (5–120 giây); gặp lời nhắc xác thực lặp lại, bị từ chối hoặc mất kết nối thì dừng, không tự thử lại password. Khi tắt Automatic login, terminal tương tác thủ công bình thường.
+
+**Disconnect Current Pane** trong Sessions dừng kết nối của pane remote đang chọn, giữ output để xem lại. **Reconnect Current Pane** dừng kết nối cũ rồi mở tab mới theo bản chụp profile của pane đó; có thể yêu cầu nhập lại password. Hủy hộp thoại password không khôi phục kết nối đã dừng. Đóng pane/tab hoặc ứng dụng sẽ kết thúc client tương ứng.
+
+Profile được lưu atomic tại `$XDG_CONFIG_HOME/devterm/sessions.json`, fallback `~/.config/devterm/sessions.json`, với cấu trúc `{"version":1,"sessions":[...]}`. Mỗi profile có UUID ổn định, tên, loại giao thức (`0`: SSH, `1`: Telnet, `2`: Serial), địa chỉ/tham số cổng và các tùy chọn đăng nhập. File chỉ chứa metadata và cờ ghi nhớ; không chứa password. JSON lỗi hoặc version không hỗ trợ được báo rõ và khóa sửa profile, giữ nguyên file lỗi; terminal local vẫn dùng được.
+
+Ví dụ một profile SSH password (các trường của giao thức khác vẫn được lưu để đổi giao thức trong editor):
+
+```json
+{
+  "version": 1,
+  "sessions": [{
+    "id": "572bc287-c861-4323-b0bd-a6c9f1a93af8",
+    "name": "Router Lab", "type": 0,
+    "host": "192.0.2.1", "port": 22, "username": "admin", "identity": "",
+    "device": "", "baud": 115200, "data_bits": 8, "stop_bits": 1,
+    "parity": "none", "flow": "none", "timeout": 30,
+    "password_auth": true, "remember": false,
+    "auto_login": false, "send_initial_enter": false,
+    "login_prompt": "(?i)(login|username)\\s*:\\s*$",
+    "password_prompt": "(?i)password\\s*:\\s*$",
+    "ready_prompt": "router#\\s*$"
+  }]
+}
+```
+
+Password ghi nhớ được lưu bằng libsecret/Secret Service, gắn với UUID và endpoint của profile. Đổi tên giữ nguyên liên kết; đổi endpoint không tái sử dụng password cũ; Duplicate tạo UUID mới và không sao chép credential. Delete yêu cầu xóa credential của profile. Nếu keyring bị khóa/không khả dụng, ứng dụng thông báo lỗi và cho phép nhập password một lần, không fallback sang file plaintext. Keyring bảo vệ dữ liệu lưu trên đĩa; không thay thế việc khóa phiên Linux khi rời máy, và ứng dụng khác trong cùng phiên người dùng đã mở khóa có thể truy cập Secret Service.
+
+Password được truyền qua descriptor RAM và IPC riêng cho SSH askpass, không đặt trong command line, biến môi trường, file cấu hình hay file tạm trên đĩa. Luồng xử lý tránh đưa password vào thông báo lỗi; frontend và helper tắt core dump cho bộ nhớ của chính chúng. Quick Commands cũ không tự chuyển đổi: hãy xóa thủ công các nút đã chứa password. Nội dung được gõ/gửi thủ công sau đăng nhập vẫn tuân theo chế độ echo của chương trình/thiết bị đang chạy.
+
+Giới hạn phiên bản này: SSH password dùng phương thức `password`, chưa hỗ trợ tự động OTP/MFA, `keyboard-interactive`, password cho nhiều jump host hoặc đổi password bắt buộc. Telnet/Serial tự động hỗ trợ username/password rồi ready prompt, chưa có chuỗi bước `enable`, nhiều password hoặc script tùy ý. Không khôi phục kết nối/tab đang chạy sau khi thoát. Các luồng đặc biệt vẫn có thể thực hiện thủ công trong terminal local.
+
+## Cấu hình Quick Commands
 
 File nằm tại `$XDG_CONFIG_HOME/devterm/commands.json`. Khi `XDG_CONFIG_HOME` không có hoặc rỗng, đường dẫn là `~/.config/devterm/commands.json`. File được ghi theo cách thay thế atomic và giữ thứ tự nút. Mỗi ID được tạo một lần và giữ nguyên khi sửa hoặc đổi vị trí.
 
@@ -75,15 +119,27 @@ DevTerm không tự chạy command khi đọc file. Nếu JSON lỗi, phiên b�
 
 ## Kiểm thử
 
-`meson test` có năm nhóm kiểm tra (22 test):
+`meson test` có tám nhóm kiểm tra (42 test khi có đủ dependency và display):
 
 - `commands`: 4 test cho round-trip Unicode, dấu nháy, shell operators, thứ tự, `send_enter`, đường dẫn XDG, dữ liệu lỗi và lỗi ghi file vẫn giữ nguyên nội dung cũ.
 - `layout`: 6 test tích hợp với shell/PTY thật cho bố cục độc lập, kế thừa thư mục có dấu cách, bỏ qua thông tin thư mục remote, fallback sau shell exit và giải phóng pane khi spawn chưa hoàn tất. Các test hình học dùng cửa sổ được hiển thị thật để đo chia đôi khi split phải/xuống liên tiếp, split khác hướng, chọn lại pane cũ, giữ divider đã chỉnh khi resize/đóng pane, split nhiều lần trước khi bố trí và đóng split đang chờ khi cửa sổ bị ẩn. Nhóm này tự bỏ qua nếu không có display; cần X11 hoặc Wayland để chạy đầy đủ.
 - `search`: 4 test với VTE thật cho Unicode, ký tự regex được tìm nguyên văn, scrollback, Match case, Find whole words only (gồm chữ số, `_`, dấu Unicode dạng tổ hợp và kết hợp Match case), trước/sau/quay vòng, trạng thái độc lập giữa pane, search sau shell exit, pane bị ẩn rồi hiển thị lại và đóng pane khi search đang chờ. Nhóm này cũng tự bỏ qua nếu không có display.
 - `contents`: 3 test với VTE thật cho clipboard khớp snapshot, Unicode, bỏ ANSI, lấy scrollback khi đang cuộn ở đầu, giữ vùng chọn/vị trí cuộn, loại nội dung đã vượt giới hạn buffer, dòng dài sau resize, buffer độc lập giữa pane, snapshot không đổi khi có output mới/đóng pane, màn hình thay thế và shell exit. Cần display để chạy nhóm này.
 - `export`: 5 test cho ghi UTF-8 và tên file Unicode, thay file atomic (kiểm tra qua hard link), quyền file, hủy trước khi lưu, lỗi lúc commit, thư mục không ghi được và từ chối đường dẫn không phải local. Nhóm này không cần GUI; test quyền ghi tự bỏ qua nếu chạy bằng root.
+- `sessions`: 5 test cho round-trip Unicode/thứ tự, dữ liệu lỗi và giữ file cũ, liên kết credential theo endpoint, descriptor RAM đã seal và state machine prompt phân mảnh/ANSI/password-only/từ chối đăng nhập.
+- `session-ui`: 3 test GTK cho thêm/nhân bản/xóa profile, nhập password, ghi nhớ từ hộp thoại Connect, lưu/lấy/xóa credential qua libsecret, hủy request khi đóng ứng dụng và giữ file cấu hình lỗi. Test chạy D-Bus và GNOME Keyring riêng với thư mục tạm, không dùng keyring thật của người dùng. Cần display và `gnome-keyring-daemon`.
+- `connections`: 12 test với client thật và server SSH/Telnet loopback hoặc cổng Serial giả lập bằng PTY: tự đăng nhập, tương tác, resize, initial Enter, lỗi cổng, echo password không lọt vào output, sai password không retry, prompt lạ/timeout/hủy, host key thay đổi, hủy/chấp nhận host mới và từ chối tiến trình lạ đọc password qua IPC. Cần OpenSSH, Telnet, picocom; SSH server thử nghiệm cần Python `asyncssh`; thao tác hộp thoại host key cần X11 và `xdotool`. Các phần thiếu dependency được báo skip.
 
-Build và cả năm nhóm test đã qua. Dependency được giải nén tạm từ gói Ubuntu 24.04 vào `/tmp` vì máy kiểm thử yêu cầu mật khẩu sudo. Kiểm tra giao diện trên X11/Xvfb đã xác nhận: nút New Terminal và phím tắt tạo tab riêng; tab mới kế thừa thư mục; split nhiều cấp; chuyển tab khôi phục đúng pane; Quick Commands chỉ gửi vào pane đang chọn trong tab hiện tại; Cancel giữ nguyên shell; Close Tab kết thúc các shell của tab đó; đóng pane cuối đưa về trạng thái trống; tạo lại tab ở home; đóng tab đã exit không hỏi xác nhận; đóng cửa sổ bằng yêu cầu chuẩn `WM_DELETE_WINDOW` thoát bình thường. Các kiểm tra cấu hình và Quick Commands của phiên bản trước cũng đã xác nhận thêm/sửa/xóa/đổi thứ tự, `send_enter=false`, shell exit và giữ nguyên file JSON lỗi.
+Để chạy đầy đủ test kết nối, có thể tạo virtualenv thử nghiệm rồi thêm site-packages vào `PYTHONPATH` cho Python chạy Meson:
+
+```sh
+sudo apt install python3-venv xdotool xvfb
+python3 -m venv /tmp/devterm-test-venv
+/tmp/devterm-test-venv/bin/pip install asyncssh
+PYTHONPATH="$(/tmp/devterm-test-venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" xvfb-run -a meson test -C build --print-errorlogs
+```
+
+Build và đủ 42 test trong tám nhóm đã qua trên X11/Xvfb, không có test bị skip. Dependency được giải nén tạm từ gói Ubuntu 24.04 vào `/tmp` vì máy kiểm thử chưa cài bộ development system-wide. Kiểm tra giao diện trên X11/Xvfb đã xác nhận: nút New Terminal và phím tắt tạo tab riêng; tab mới kế thừa thư mục; split nhiều cấp; chuyển tab khôi phục đúng pane; Quick Commands chỉ gửi vào pane đang chọn trong tab hiện tại; Cancel giữ nguyên shell; Close Tab kết thúc các shell của tab đó; đóng pane cuối đưa về trạng thái trống; tạo lại tab ở home; đóng tab đã exit không hỏi xác nhận; đóng cửa sổ bằng yêu cầu chuẩn `WM_DELETE_WINDOW` thoát bình thường. Các kiểm tra cấu hình và Quick Commands của phiên bản trước cũng đã xác nhận thêm/sửa/xóa/đổi thứ tự, `send_enter=false`, shell exit và giữ nguyên file JSON lỗi.
 
 Lỗi split liên tiếp ép pane về mép đã được tái hiện bằng test kích thước trước khi sửa. Sau khi sửa, cả 14 test đều qua trên X11/Xvfb; thao tác trên ứng dụng bằng nút toolbar và kéo chuột thật đã xác nhận split phải hai lần, kéo divider ngoài rồi split xuống hai lần vẫn giữ vị trí divider đã kéo. Các test hình học cũng kiểm tra resize, đóng pane và mở rộng nhánh split còn lại.
 
@@ -104,5 +160,6 @@ Checklist kiểm tra thủ công trên hệ thống cài dependency bình thư�
 9. Đóng tab bằng nút × và phím tắt, thử cả Cancel và Close Tab; đóng pane cuối và tab cuối, rồi tạo lại. Kiểm tra các shell ở tab khác vẫn chạy.
 10. Mở Search bằng nút và phím tắt trong các pane khác nhau; tìm Unicode, ký tự đặc biệt và nội dung trong scrollback; thử Match case, Find whole words only, Enter, Shift+Enter, Esc và đổi tab khi đang nhập query. Xác nhận query và các tùy chọn của từng pane được giữ riêng và Quick Commands vẫn gửi đúng pane khi ô search lấy focus.
 11. Dùng Copy All Text và Export Text ở các pane/tab khác nhau, cả khi shell đã exit; kiểm tra UTF-8, scrollback, dòng dài và nội dung chỉ thuộc pane đang chọn. Thử Cancel, ghi đè, lỗi quyền ghi, output tiếp tục chạy trong lúc mở Save và đóng cửa sổ khi Save còn mở.
+12. Thêm profile SSH/Telnet/Serial cho thiết bị thử nghiệm; kiểm tra prompt thực tế, username/password, timeout và initial Enter. Lưu password vào keyring, khởi động lại rồi Connect; sửa endpoint và kiểm tra không dùng lại password cũ. Thử sai password, keyring bị khóa, host key mới/thay đổi, cổng Serial bận/mất quyền và tháo thiết bị. Dùng Disconnect/Reconnect rồi đóng tab để xác nhận client dừng và output còn giữ.
 
-Chưa kiểm tra SSH vì không có target; chưa chạy `vim`, `top`, `ping` trong phiên kiểm thử tự động. Tab đã được kiểm tra trên X11; cần xác nhận thêm tương tác trên Wayland. Lỗi GDK từng ghi nhận khi kiểm thử đóng cửa sổ xuất phát từ việc hủy trực tiếp X surface bằng `xdotool windowclose`; kiểm tra lại bằng yêu cầu đóng chuẩn của window manager đã qua.
+Kiểm tra Sessions trên ứng dụng thật với X11/Xvfb và Telnet loopback đã xác nhận Connect mở tab mới, password không xuất hiện trong buffer Copy All Text, input remote hoạt động, split tạo shell local riêng và đóng pane remote dừng kết nối. Keyring và SSH dùng dịch vụ/server thử nghiệm riêng; Serial chỉ dùng PTY giả lập. Chưa kiểm tra router/server production, thiết bị Serial vật lý hoặc tương tác trên Wayland; chưa chạy `vim`, `top`, `ping` trong phiên kiểm thử tự động. Lỗi GDK từng ghi nhận khi kiểm thử đóng cửa sổ xuất phát từ việc hủy trực tiếp X surface bằng `xdotool windowclose`; kiểm tra lại bằng yêu cầu đóng chuẩn của window manager đã qua.

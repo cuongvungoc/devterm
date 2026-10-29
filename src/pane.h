@@ -1,11 +1,15 @@
 #pragma once
 #include <gtk/gtk.h>
 #include <vte/vte.h>
+#include "sessions.h"
 
 typedef struct TerminalPane TerminalPane;
 typedef void (*PaneEvent)(TerminalPane *pane, const char *message, gpointer user_data);
 
 TerminalPane *pane_new(const char *working_directory, PaneEvent selected, PaneEvent status, gpointer user_data);
+TerminalPane *pane_new_session(const SessionProfile *profile, const char *password, PaneEvent selected, PaneEvent status, gpointer user_data);
+const SessionProfile *pane_session_profile(TerminalPane *pane);
+void pane_disconnect(TerminalPane *pane);
 GtkWidget *pane_widget(TerminalPane *pane);
 void pane_set_active(TerminalPane *pane, gboolean active);
 void pane_focus(TerminalPane *pane);

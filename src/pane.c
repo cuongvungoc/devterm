@@ -20,6 +20,9 @@ struct TerminalPane {
     gboolean starting;
     gboolean exited;
     char *working_directory;
+    SessionProfile *profile;
+    GCancellable *spawn_cancel;
+    gboolean disconnecting;
     PaneEvent selected;
     PaneEvent status;
     gpointer user_data;
@@ -30,6 +33,8 @@ static void pane_unref(TerminalPane *p) {
     if (--p->refs) return;
     g_object_unref(p->root);
     g_free(p->working_directory);
+    session_profile_free(p->profile);
+    g_clear_object(&p->spawn_cancel);
     g_free(p);
 }
 
@@ -234,9 +239,10 @@ static void on_exit(VteTerminal *terminal, int status, gpointer data) {
     p->child = 0;
     if (p->closed) return;
     char *message;
-    if (WIFEXITED(status)) message = g_strdup_printf("Shell exited (code %d). Close this pane or create another terminal.", WEXITSTATUS(status));
-    else if (WIFSIGNALED(status)) message = g_strdup_printf("Shell ended (signal %d). Close this pane or create another terminal.", WTERMSIG(status));
-    else message = g_strdup("Shell ended. Close this pane or create another terminal.");
+    const char *kind = p->profile ? "Session" : "Shell";
+    if (WIFEXITED(status)) message = g_strdup_printf("%s exited (code %d). Output is retained; close the pane or reconnect.", kind, WEXITSTATUS(status));
+    else if (WIFSIGNALED(status)) message = g_strdup_printf("%s ended (signal %d). Output is retained.", kind, WTERMSIG(status));
+    else message = g_strdup_printf("%s ended. Output is retained.", kind);
     gtk_label_set_text(GTK_LABEL(p->label), message);
     if (p->status) p->status(p, message, p->user_data);
     g_free(message);
@@ -253,10 +259,11 @@ static void on_spawn(VteTerminal *terminal, GPid pid, GError *error, gpointer da
     (void)terminal;
     TerminalPane *p = data;
     p->starting = FALSE;
-    if (p->closed) {
+    if (p->closed || p->disconnecting) {
         if (pid > 0) kill(pid, SIGHUP);
+        if (!p->closed && error) gtk_label_set_text(GTK_LABEL(p->label), "Session connection cancelled");
     } else if (error) {
-        char *message = g_strdup_printf("Cannot start shell: %s", error->message);
+        char *message = g_strdup_printf("Cannot start %s: %s", p->profile ? "session" : "shell", error->message);
         gtk_label_set_text(GTK_LABEL(p->label), message);
         if (p->status) p->status(p, message, p->user_data);
         g_free(message);
@@ -264,24 +271,26 @@ static void on_spawn(VteTerminal *terminal, GPid pid, GError *error, gpointer da
         if (!p->exited) {
             p->child = pid;
             p->running = TRUE;
-            gtk_label_set_text(GTK_LABEL(p->label), "Terminal");
+            gtk_label_set_text(GTK_LABEL(p->label), p->profile ? p->profile->name : "Terminal");
         }
     }
     pane_unref(p);
 }
 
-TerminalPane *pane_new(const char *working_directory, PaneEvent selected, PaneEvent status, gpointer user_data) {
+static TerminalPane *pane_create(const char *working_directory, const SessionProfile *profile, const char *password, PaneEvent selected, PaneEvent status, gpointer user_data) {
     TerminalPane *p = g_new0(TerminalPane, 1);
     p->refs = 1;
     p->selected = selected;
     p->status = status;
     p->user_data = user_data;
+    p->profile = profile ? session_profile_copy(profile) : NULL;
+    p->spawn_cancel = g_cancellable_new();
     p->working_directory = g_strdup(working_directory && g_path_is_absolute(working_directory) &&
                                    g_file_test(working_directory, G_FILE_TEST_IS_DIR) ? working_directory : g_get_home_dir());
     p->root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     g_object_ref_sink(p->root);
     gtk_widget_add_css_class(p->root, "terminal-pane");
-    p->label = gtk_label_new("Starting shell…");
+    p->label = gtk_label_new(profile ? "Starting session…" : "Starting shell…");
     gtk_widget_set_halign(p->label, GTK_ALIGN_START);
     gtk_widget_add_css_class(p->label, "pane-label");
     GtkGesture *click = gtk_gesture_click_new();
@@ -315,14 +324,40 @@ TerminalPane *pane_new(const char *working_directory, PaneEvent selected, PaneEv
     gtk_shortcut_controller_add_shortcut(shortcuts, gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_v, GDK_CONTROL_MASK | GDK_SHIFT_MASK), gtk_named_action_new("term.paste")));
     gtk_widget_add_controller(GTK_WIDGET(p->terminal), GTK_EVENT_CONTROLLER(shortcuts));
 
+    if (profile) {
+        GError *error = NULL;
+        int fd = session_launch_fd(profile, password, &error);
+        if (fd < 0) { gtk_label_set_text(GTK_LABEL(p->label), error->message); g_clear_error(&error); return p; }
+        char *self = g_file_read_link("/proc/self/exe", NULL);
+        char *directory = self ? g_path_get_dirname(self) : g_get_current_dir();
+        char *helper = g_build_filename(directory, "devterm-connect", NULL);
+        g_free(self); g_free(directory);
+        const char *argv[] = {helper, "--session", NULL}; int map_fd = 3;
+        p->starting = TRUE;
+        vte_terminal_spawn_with_fds_async(p->terminal, VTE_PTY_DEFAULT, p->working_directory, argv, NULL,
+            &fd, 1, &map_fd, 1, G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, p->spawn_cancel, on_spawn, pane_ref(p));
+        g_free(helper); return p;
+    }
     const char *shell = g_getenv("SHELL");
     if (!shell || !g_path_is_absolute(shell) || !g_file_test(shell, G_FILE_TEST_IS_REGULAR) ||
         !g_file_test(shell, G_FILE_TEST_IS_EXECUTABLE)) shell = "/bin/sh";
     char *argv[] = {(char *)shell, NULL};
     p->starting = TRUE;
     vte_terminal_spawn_async(p->terminal, VTE_PTY_DEFAULT, p->working_directory, argv, NULL,
-                             G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, NULL, on_spawn, pane_ref(p));
+                             G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, p->spawn_cancel, on_spawn, pane_ref(p));
     return p;
+}
+TerminalPane *pane_new(const char *directory, PaneEvent selected, PaneEvent status, gpointer data) {
+    return pane_create(directory, NULL, NULL, selected, status, data);
+}
+TerminalPane *pane_new_session(const SessionProfile *profile, const char *password, PaneEvent selected, PaneEvent status, gpointer data) {
+    return pane_create(NULL, profile, password, selected, status, data);
+}
+const SessionProfile *pane_session_profile(TerminalPane *p) { return p ? p->profile : NULL; }
+void pane_disconnect(TerminalPane *p) {
+    if (!p || p->closed || !p->profile) return;
+    p->disconnecting = TRUE; g_cancellable_cancel(p->spawn_cancel);
+    if (p->child > 0) kill(p->child, SIGHUP);
 }
 
 GtkWidget *pane_widget(TerminalPane *p) { return p->root; }
@@ -364,7 +399,7 @@ gboolean pane_copy_all_text(TerminalPane *p, GError **error) {
     g_bytes_unref(text);
     return TRUE;
 }
-gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && p->running; }
+gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && !p->disconnecting && p->running; }
 gboolean pane_has_live_session(TerminalPane *p) { return p && !p->closed && (p->starting || p->running); }
 char *pane_dup_working_directory(TerminalPane *p) {
     /* Read the local shell process, never a remote OSC 7 directory from SSH. */
@@ -386,6 +421,7 @@ void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
 void pane_close(TerminalPane *p) {
     if (!p || p->closed) return;
     p->closed = TRUE;
+    g_cancellable_cancel(p->spawn_cancel);
     search_cancel_timeout(p);
     if (p->child > 0) kill(p->child, SIGHUP);
     g_signal_handlers_disconnect_by_data(p->terminal, p);

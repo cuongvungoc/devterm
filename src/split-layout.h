@@ -5,6 +5,7 @@ typedef struct SplitLayout SplitLayout;
 typedef void (*LayoutStatus)(SplitLayout *layout, const char *message, gpointer user_data);
 
 SplitLayout *split_layout_new(const char *directory, LayoutStatus status, gpointer user_data);
+SplitLayout *split_layout_new_session(const SessionProfile *profile, const char *password, LayoutStatus status, gpointer user_data);
 void split_layout_free(SplitLayout *layout);
 GtkWidget *split_layout_widget(SplitLayout *layout);
 TerminalPane *split_layout_active(SplitLayout *layout);

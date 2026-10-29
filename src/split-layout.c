@@ -130,6 +130,17 @@ SplitLayout *split_layout_new(const char *directory, LayoutStatus status, gpoint
     set_active(layout, layout->tree->pane);
     return layout;
 }
+SplitLayout *split_layout_new_session(const SessionProfile *profile, const char *password, LayoutStatus status, gpointer data) {
+    SplitLayout *layout = g_new0(SplitLayout, 1);
+    layout->status = status; layout->user_data = data;
+    layout->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); g_object_ref_sink(layout->widget);
+    gtk_widget_set_hexpand(layout->widget, TRUE); gtk_widget_set_vexpand(layout->widget, TRUE);
+    LayoutNode *node = g_new0(LayoutNode, 1);
+    node->pane = pane_new_session(profile, password, selected, pane_status, layout);
+    node->widget = pane_widget(node->pane); layout->tree = node;
+    gtk_box_append(GTK_BOX(layout->widget), node->widget); set_active(layout, node->pane);
+    return layout;
+}
 void split_layout_free(SplitLayout *layout) {
     if (!layout) return;
     layout->track_focus = FALSE;

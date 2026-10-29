@@ -1,8 +1,10 @@
 #include "commands.h"
 #include "split-layout.h"
 #include "text-export.h"
+#include "sessions-ui.h"
 #include <gtk/gtk.h>
 #include <string.h>
+#include <sys/prctl.h>
 
 typedef struct App App;
 typedef struct TerminalTab TerminalTab;
@@ -25,6 +27,7 @@ struct App {
     GPtrArray *commands;
     char *config_path;
     gboolean config_valid;
+    SessionManager *sessions;
 };
 
 static void refresh_commands(App *app);
@@ -151,19 +154,14 @@ static void on_tab_close(GtkButton *button, gpointer data) {
     (void)button;
     request_close_tab(data);
 }
-static void on_new(GtkButton *button, gpointer data) {
-    (void)button;
-    App *app = data;
+static void open_tab(App *app, const char *directory, const SessionProfile *profile, const char *password) {
     if (app->shutting_down) return;
-    TerminalPane *active = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
-    char *directory = pane_dup_working_directory(active);
     TerminalTab *tab = g_new0(TerminalTab, 1);
     tab->app = app;
     tab->id = ++app->next_tab_id;
-    tab->title = g_strdup_printf("Terminal %u", tab->id);
-    tab->message = g_strdup("Terminal ready");
-    tab->layout = split_layout_new(directory, on_tab_status, tab);
-    g_free(directory);
+    tab->title = profile ? g_strdup(profile->name) : g_strdup_printf("Terminal %u", tab->id);
+    tab->message = g_strdup(profile ? "Session starting. Authentication status appears in the pane." : "Terminal ready");
+    tab->layout = profile ? split_layout_new_session(profile, password, on_tab_status, tab) : split_layout_new(directory, on_tab_status, tab);
     tab->page = split_layout_widget(tab->layout);
     g_object_set_data(G_OBJECT(tab->page), "terminal-tab", tab);
     g_ptr_array_add(app->tabs, tab);
@@ -181,6 +179,26 @@ static void on_new(GtkButton *button, gpointer data) {
     gtk_notebook_set_current_page(GTK_NOTEBOOK(app->notebook), page);
     sync_current_tab(app);
 }
+static void on_new(GtkButton *button, gpointer data) {
+    (void)button; App *app = data;
+    TerminalPane *active = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
+    char *directory = pane_dup_working_directory(active); open_tab(app, directory, NULL, NULL); g_free(directory);
+}
+static void on_session_connect(const SessionProfile *profile, const char *password, gpointer data) {
+    open_tab(data, NULL, profile, password);
+}
+static void on_current_session(gboolean reconnect, gpointer data) {
+    App *app = data; if (app->shutting_down) return;
+    TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
+    const SessionProfile *profile = pane_session_profile(pane);
+    if (!profile) { status(app, "Select a connected-session pane first"); return; }
+    SessionProfile *copy = session_profile_copy(profile);
+    pane_disconnect(pane);
+    if (reconnect) session_manager_connect(app->sessions, copy);
+    else status(app, "Disconnect requested; pane output is retained");
+    session_profile_free(copy);
+}
+static void on_sessions(GtkButton *button, gpointer data) { (void)button; App *app = data; session_manager_show(app->sessions); }
 static void on_split_right(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
@@ -522,6 +540,7 @@ static void on_window_destroy(GtkWidget *window, gpointer data) {
     App *app = data;
     if (app->shutting_down) return;
     app->shutting_down = TRUE;
+    g_clear_pointer(&app->sessions, session_manager_free);
     if (app->export_cancel) g_cancellable_cancel(app->export_cancel);
     app->active_tab = NULL;
     if (app->focus_idle) { g_source_remove(app->focus_idle); app->focus_idle = 0; }
@@ -541,6 +560,7 @@ static void app_free(gpointer data) {
     g_ptr_array_unref(app->tabs);
     g_ptr_array_unref(app->commands);
     g_clear_object(&app->export_cancel);
+    g_clear_pointer(&app->sessions, session_manager_free);
     g_free(app->config_path);
     g_free(app);
 }
@@ -596,6 +616,8 @@ static void activate(GtkApplication *application, gpointer data) {
     gtk_widget_set_tooltip_text(app->export_button, "Save a snapshot of the selected pane's retained text as UTF-8 (.txt)");
     g_signal_connect(app->export_button, "clicked", G_CALLBACK(on_export_text), app);
     gtk_box_append(GTK_BOX(tools), app->export_button);
+    GtkWidget *sessions = gtk_button_new_with_label("Sessions…");
+    g_signal_connect(sessions, "clicked", G_CALLBACK(on_sessions), app); gtk_box_append(GTK_BOX(tools), sessions);
     app->workspace = gtk_stack_new();
     gtk_stack_set_hhomogeneous(GTK_STACK(app->workspace), FALSE);
     gtk_stack_set_vhomogeneous(GTK_STACK(app->workspace), FALSE);
@@ -632,12 +654,16 @@ static void activate(GtkApplication *application, gpointer data) {
         g_clear_error(&error);
     }
     refresh_commands(app);
+    app->sessions = session_manager_new(GTK_WINDOW(app->window), on_session_connect, on_current_session, app);
     on_new(NULL, app);
     if (config_error) { status(app, config_error); g_free(config_error); }
     gtk_window_present(GTK_WINDOW(app->window));
     schedule_focus(app);
 }
 int main(int argc, char **argv) {
+    /* Password entry buffers must not end up in core dumps. Exec resets this
+     * flag, so local shells keep their usual debugging/core-dump behavior. */
+    prctl(PR_SET_DUMPABLE, 0);
     GtkApplication *app = gtk_application_new("com.example.DevTerm", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     int result = g_application_run(G_APPLICATION(app), argc, argv);
