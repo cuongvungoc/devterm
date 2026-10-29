@@ -58,6 +58,9 @@ static gboolean is_start(GtkWidget *parent, GtkWidget *child) {
 static void detach(GtkWidget *widget) {
     GtkWidget *parent = gtk_widget_get_parent(widget);
     if (!parent) return;
+    GtkRoot *root = gtk_widget_get_root(widget);
+    GtkWidget *focus = root ? gtk_root_get_focus(root) : NULL;
+    if (focus && (focus == widget || gtk_widget_is_ancestor(focus, widget))) gtk_root_set_focus(root, NULL);
     if (GTK_IS_PANED(parent)) {
         if (is_start(parent, widget)) gtk_paned_set_start_child(GTK_PANED(parent), NULL);
         else gtk_paned_set_end_child(GTK_PANED(parent), NULL);

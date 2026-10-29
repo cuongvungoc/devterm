@@ -208,6 +208,13 @@ static void action_close_tab(GSimpleAction *action, GVariant *parameter, gpointe
     App *app = data;
     request_close_tab(app->active_tab);
 }
+static void action_find_in_pane(GSimpleAction *action, GVariant *parameter, gpointer data) {
+    (void)action; (void)parameter;
+    App *app = data;
+    TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
+    if (pane) pane_search_open(pane);
+    else status(app, "Select a terminal pane to search");
+}
 static void action_cycle_tab(GSimpleAction *action, GVariant *parameter, gpointer data) {
     (void)parameter;
     App *app = data;
@@ -431,6 +438,7 @@ static void on_window_destroy(GtkWidget *window, gpointer data) {
 static gboolean on_window_close_request(GtkWindow *window, gpointer data) {
     /* Cancel asynchronous dialogs before the default handler destroys the
      * window; their callback holds a reference until cancellation completes. */
+    gtk_window_set_focus(window, NULL);
     on_window_destroy(GTK_WIDGET(window), data);
     return FALSE;
 }
@@ -453,12 +461,14 @@ static void activate(GtkApplication *application, gpointer data) {
     const GActionEntry actions[] = {
         {.name = "new-tab", .activate = action_new_tab},
         {.name = "close-tab", .activate = action_close_tab},
+        {.name = "find-in-pane", .activate = action_find_in_pane},
         {.name = "next-tab", .activate = action_cycle_tab},
         {.name = "previous-tab", .activate = action_cycle_tab}
     };
     g_action_map_add_action_entries(G_ACTION_MAP(app->window), actions, G_N_ELEMENTS(actions), app);
     gtk_application_set_accels_for_action(application, "win.new-tab", (const char *[]){"<Control><Shift>t", NULL});
     gtk_application_set_accels_for_action(application, "win.close-tab", (const char *[]){"<Control><Shift>w", NULL});
+    gtk_application_set_accels_for_action(application, "win.find-in-pane", (const char *[]){"<Control><Shift>f", NULL});
     gtk_application_set_accels_for_action(application, "win.next-tab", (const char *[]){"<Control>Page_Down", NULL});
     gtk_application_set_accels_for_action(application, "win.previous-tab", (const char *[]){"<Control>Page_Up", NULL});
     gtk_window_set_title(GTK_WINDOW(app->window), "DevTerm");
@@ -480,6 +490,10 @@ static void activate(GtkApplication *application, gpointer data) {
     g_signal_connect(split_down, "clicked", G_CALLBACK(on_split_down), app); gtk_box_append(GTK_BOX(tools), split_down);
     GtkWidget *close = gtk_button_new_with_label("Close Pane");
     g_signal_connect(close, "clicked", G_CALLBACK(on_close_pane), app); gtk_box_append(GTK_BOX(tools), close);
+    GtkWidget *search = gtk_button_new_with_label("Search");
+    gtk_widget_set_tooltip_text(search, "Find in selected pane (Ctrl+Shift+F)");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(search), "win.find-in-pane");
+    gtk_box_append(GTK_BOX(tools), search);
     app->workspace = gtk_stack_new();
     gtk_stack_set_hhomogeneous(GTK_STACK(app->workspace), FALSE);
     gtk_stack_set_vhomogeneous(GTK_STACK(app->workspace), FALSE);
