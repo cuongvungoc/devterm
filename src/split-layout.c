@@ -5,6 +5,7 @@ struct LayoutNode {
     LayoutNode *parent, *first, *second;
     TerminalPane *pane;
     GtkWidget *widget;
+    guint balance_tick;
 };
 struct SplitLayout {
     GtkWidget *widget;
@@ -66,8 +67,46 @@ static void detach(GtkWidget *widget) {
         else gtk_paned_set_end_child(GTK_PANED(parent), NULL);
     } else gtk_box_remove(GTK_BOX(parent), widget);
 }
+static gboolean balance_split(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+    (void)clock;
+    LayoutNode *node = data;
+    /* A parent centered in this frame has not allocated its children yet.
+     * Initialize outer splits first, each followed by one allocation pass. */
+    for (LayoutNode *parent = node->parent; parent; parent = parent->parent)
+        if (parent->balance_tick) return G_SOURCE_CONTINUE;
+    gboolean position_set;
+    int available;
+    g_object_get(widget, "position-set", &position_set, "max-position", &available, NULL);
+    /* Respect a divider already moved by the user before initialization. */
+    if (!position_set) {
+        GtkOrientation orientation = gtk_orientable_get_orientation(GTK_ORIENTABLE(widget));
+        int size = orientation == GTK_ORIENTATION_HORIZONTAL ? gtk_widget_get_width(widget) : gtk_widget_get_height(widget);
+        if (!gtk_widget_get_mapped(widget) || size <= 1 || available == G_MAXINT) return G_SOURCE_CONTINUE;
+        /* Both children may shrink, so max-position is the allocated span
+         * minus the separator. Wait for that first allocation, then center
+         * once; GTK preserves this ratio on subsequent window resizes. */
+        gtk_paned_set_position(GTK_PANED(widget), available / 2);
+        return G_SOURCE_CONTINUE;
+    }
+    node->balance_tick = 0;
+    return G_SOURCE_REMOVE;
+}
+static void cancel_balance(LayoutNode *node) {
+    if (node->balance_tick) {
+        gtk_widget_remove_tick_callback(node->widget, node->balance_tick);
+        node->balance_tick = 0;
+    }
+}
+static void preserve_ancestors(LayoutNode *node) {
+    for (; node; node = node->parent) {
+        /* Unallocated splits still have their own pending 50/50 initializer. */
+        if (!node->balance_tick && gtk_widget_get_width(node->widget) > 0 && gtk_widget_get_height(node->widget) > 0)
+            gtk_paned_set_position(GTK_PANED(node->widget), gtk_paned_get_position(GTK_PANED(node->widget)));
+    }
+}
 static void free_node(LayoutNode *node) {
     if (!node) return;
+    cancel_balance(node);
     detach(node->widget);
     if (node->pane) pane_close(node->pane);
     else {
@@ -119,6 +158,7 @@ void split_layout_split(SplitLayout *layout, GtkOrientation orientation) {
     g_free(directory);
     GtkWidget *parent = gtk_widget_get_parent(node->widget);
     gboolean start = is_start(parent, node->widget);
+    preserve_ancestors(node->parent);
     detach(node->widget);
     node->pane = NULL;
     node->widget = gtk_paned_new(orientation);
@@ -127,7 +167,10 @@ void split_layout_split(SplitLayout *layout, GtkOrientation orientation) {
     old->parent = node; fresh->parent = node;
     gtk_paned_set_start_child(GTK_PANED(node->widget), old->widget);
     gtk_paned_set_end_child(GTK_PANED(node->widget), fresh->widget);
+    gtk_paned_set_resize_start_child(GTK_PANED(node->widget), TRUE);
+    gtk_paned_set_resize_end_child(GTK_PANED(node->widget), TRUE);
     attach_at(parent, start, node->widget);
+    node->balance_tick = gtk_widget_add_tick_callback(node->widget, balance_split, node, NULL);
     set_active(layout, fresh->pane);
     pane_focus(fresh->pane);
 }
@@ -140,6 +183,8 @@ void split_layout_close_active(SplitLayout *layout) {
     LayoutNode *grand = branch->parent;
     GtkWidget *parent = gtk_widget_get_parent(branch->widget);
     gboolean start = is_start(parent, branch->widget);
+    preserve_ancestors(grand);
+    cancel_balance(branch);
     pane_set_active(node->pane, FALSE);
     layout->active = NULL;
     detach(other->widget);

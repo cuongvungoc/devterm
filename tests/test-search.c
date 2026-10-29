@@ -162,7 +162,7 @@ static void test_whole_words(void) {
     TerminalPane *pane = new_pane();
     feed(pane, "\r\nbobcat\r\nđườngdẫn\r\n_owl owl2 2owl owl_\r\n"
                "DOG\r\n(fox).\r\n(a.b) aXb\r\ncafe\u0301\r\nVIỆT\r\n", 8);
-    GtkCheckButton *whole_words = find_option(pane_widget(pane), "Find whole words only");
+    GtkCheckButton *whole_words = find_option(pane_widget(pane), "Match whole word");
     GtkCheckButton *match_case = find_option(pane_widget(pane), "Match case");
     g_assert_nonnull(whole_words); g_assert_nonnull(match_case);
     g_assert_false(gtk_check_button_get_active(whole_words));
@@ -185,7 +185,7 @@ static void test_whole_words(void) {
     /* Opening another pane must not share or reset either option. */
     TerminalPane *other = new_pane();
     query(other, "cat");
-    GtkCheckButton *other_whole_words = find_option(pane_widget(other), "Find whole words only");
+    GtkCheckButton *other_whole_words = find_option(pane_widget(other), "Match whole word");
     g_assert_false(gtk_check_button_get_active(other_whole_words));
     g_assert_true(gtk_check_button_get_active(whole_words));
     GtkWidget *close = find_widget(pane_widget(pane), GTK_TYPE_BUTTON, "Close search (Esc)");

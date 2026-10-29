@@ -32,7 +32,7 @@ env \
 
 - **New Terminal** hoặc **Ctrl+Shift+T** tạo và chuyển sang tab mới với một shell local. Tên tab lần lượt là `Terminal 1`, `Terminal 2`… Thanh tab cuộn được khi có nhiều tab.
 - Tab mới kế thừa thư mục local của pane đang chọn nếu xác định được, fallback về home. DevTerm đọc thư mục của tiến trình shell local qua `/proc`; đường dẫn remote do SSH báo về không được dùng để khởi động shell local. Tab mới không kế thừa kết nối SSH hoặc biến môi trường được export trong shell của tab cũ.
-- **Split Right** chia pane đang chọn thành trái/phải; **Split Down** chia trên/dưới, trong tab hiện tại. Pane mới cũng ưu tiên thư mục local của pane đang chọn. Có thể chia tiếp bất kỳ pane nào, kéo đường phân cách để đổi kích thước. Click vào terminal hoặc tiêu đề pane để chọn; viền xanh đánh dấu pane hiện tại.
+- **Split Right** chia đôi pane đang chọn thành trái/phải; **Split Down** chia đôi trên/dưới, trong tab hiện tại. Các divider bên ngoài giữ nguyên vị trí khi split hoặc đóng pane; khi resize cửa sổ, tỷ lệ đã chọn được giữ trong giới hạn kích thước hiển thị. Ví dụ split phải hai lần liên tiếp tạo tỷ lệ khoảng 50% / 25% / 25%. Pane mới cũng ưu tiên thư mục local của pane đang chọn. Có thể chia tiếp bất kỳ pane nào, kéo đường phân cách để đổi kích thước. Click vào terminal hoặc tiêu đề pane để chọn; viền xanh đánh dấu pane hiện tại.
 - **Ctrl+PageUp** / **Ctrl+PageDown** chuyển tab trước/sau, vòng lại ở hai đầu. Mỗi tab ghi nhớ pane được chọn gần nhất và trả focus về pane đó khi quay lại; các shell ở tab khác tiếp tục chạy.
 - **Close Pane** đóng pane đang chọn và thu gọn bố cục. Nếu đó là pane cuối, thao tác sẽ đóng tab. Nút **×** trên tab hoặc **Ctrl+Shift+W** đóng toàn bộ tab. Khi tab còn shell đang chạy hoặc khởi động, ứng dụng hỏi xác nhận; chọn **Cancel** để giữ tab, **Close Tab** để kết thúc tất cả pane trong tab đó. Đóng pane riêng trong tab có nhiều pane vẫn thực hiện ngay.
 - Đóng tab cuối giữ cửa sổ ở trạng thái trống với nút **New Terminal**. Shell tự thoát sẽ giữ pane cùng output để xem lại; đóng tab không còn shell sống sẽ không hỏi xác nhận. Tab và bố cục không được khôi phục sau khi thoát ứng dụng.
@@ -73,17 +73,19 @@ DevTerm không tự chạy command khi đọc file. Nếu JSON lỗi, phiên b�
 `meson test` có ba nhóm kiểm tra:
 
 - `commands`: 4 test cho round-trip Unicode, dấu nháy, shell operators, thứ tự, `send_enter`, đường dẫn XDG, dữ liệu lỗi và lỗi ghi file vẫn giữ nguyên nội dung cũ.
-- `layout`: 2 test tích hợp với shell/PTY thật cho bố cục độc lập, kế thừa thư mục có dấu cách, bỏ qua thông tin thư mục remote, fallback sau shell exit và giải phóng pane khi spawn chưa hoàn tất. Nhóm này tự bỏ qua nếu không có display; cần X11 hoặc Wayland để chạy đầy đủ.
+- `layout`: 6 test tích hợp với shell/PTY thật cho bố cục độc lập, kế thừa thư mục có dấu cách, bỏ qua thông tin thư mục remote, fallback sau shell exit và giải phóng pane khi spawn chưa hoàn tất. Các test hình học dùng cửa sổ được hiển thị thật để đo chia đôi khi split phải/xuống liên tiếp, split khác hướng, chọn lại pane cũ, giữ divider đã chỉnh khi resize/đóng pane, split nhiều lần trước khi bố trí và đóng split đang chờ khi cửa sổ bị ẩn. Nhóm này tự bỏ qua nếu không có display; cần X11 hoặc Wayland để chạy đầy đủ.
 - `search`: 4 test với VTE thật cho Unicode, ký tự regex được tìm nguyên văn, scrollback, Match case, Find whole words only (gồm chữ số, `_`, dấu Unicode dạng tổ hợp và kết hợp Match case), trước/sau/quay vòng, trạng thái độc lập giữa pane, search sau shell exit, pane bị ẩn rồi hiển thị lại và đóng pane khi search đang chờ. Nhóm này cũng tự bỏ qua nếu không có display.
 
 Build và cả ba nhóm test đã qua. Dependency được giải nén tạm từ gói Ubuntu 24.04 vào `/tmp` vì máy kiểm thử yêu cầu mật khẩu sudo. Kiểm tra giao diện trên X11/Xvfb đã xác nhận: nút New Terminal và phím tắt tạo tab riêng; tab mới kế thừa thư mục; split nhiều cấp; chuyển tab khôi phục đúng pane; Quick Commands chỉ gửi vào pane đang chọn trong tab hiện tại; Cancel giữ nguyên shell; Close Tab kết thúc các shell của tab đó; đóng pane cuối đưa về trạng thái trống; tạo lại tab ở home; đóng tab đã exit không hỏi xác nhận; đóng cửa sổ bằng yêu cầu chuẩn `WM_DELETE_WINDOW` thoát bình thường. Các kiểm tra cấu hình và Quick Commands của phiên bản trước cũng đã xác nhận thêm/sửa/xóa/đổi thứ tự, `send_enter=false`, shell exit và giữ nguyên file JSON lỗi.
+
+Lỗi split liên tiếp ép pane về mép đã được tái hiện bằng test kích thước trước khi sửa. Sau khi sửa, cả 14 test đều qua trên X11/Xvfb; thao tác trên ứng dụng bằng nút toolbar và kéo chuột thật đã xác nhận split phải hai lần, kéo divider ngoài rồi split xuống hai lần vẫn giữ vị trí divider đã kéo. Các test hình học cũng kiểm tra resize, đóng pane và mở rộng nhánh split còn lại.
 
 Kiểm tra giao diện search trên X11/Xvfb đã xác nhận phím mở search, query riêng giữa pane/tab, active pane cập nhật khi click vào ô search, Quick Commands vẫn gửi đúng pane và đóng pane an toàn khi search còn đang chờ. Một chương trình foreground đọc PTY ở raw mode xác nhận nội dung query, Enter, Shift+Enter và Esc không lọt vào child; sau khi đóng search, ký tự gõ tiếp đi vào đúng terminal.
 
 Checklist kiểm tra thủ công trên hệ thống cài dependency bình thường:
 
 1. Mở ứng dụng, nhập lệnh shell, chạy `vim`, `top` và xác nhận màu ANSI, scrollback, copy/paste.
-2. Split cả hai hướng nhiều lần, kéo divider, chọn và đóng các pane theo nhiều thứ tự.
+2. Split cả hai hướng nhiều lần: pane đang chọn được chia đôi, các pane bên ngoài giữ kích thước. Kéo divider sang tỷ lệ khác rồi split, resize cửa sổ và đóng pane; xác nhận tỷ lệ được giữ. Thử click nhanh liên tiếp và split sau khi đổi tab.
 3. Thêm, sửa, xóa, đổi vị trí nút; mở lại ứng dụng để xác nhận thứ tự, ID và nội dung được giữ.
 4. Chọn lần lượt hai pane rồi bấm cùng nút; chỉ pane được chọn nhận input.
 5. Kiểm tra `send_enter=false`, dấu nháy, pipe, Unicode và `cd` trong shell hiện tại.

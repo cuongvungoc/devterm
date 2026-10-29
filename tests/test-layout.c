@@ -71,10 +71,151 @@ static void test_close_during_spawn(void) {
     g_assert_null(first_widget);
     g_assert_null(second_widget);
 }
+static void settle_layout(void) {
+    /* Allow several frame-clock layout passes, including deferred centering. */
+    gint64 deadline = g_get_monotonic_time() + 150 * G_TIME_SPAN_MILLISECOND;
+    while (g_get_monotonic_time() < deadline) iterate();
+}
+static GtkWidget *present_layout(SplitLayout *layout) {
+    GtkWidget *window = gtk_window_new();
+    gtk_window_set_default_size(GTK_WINDOW(window), 1200, 800);
+    gtk_window_set_child(GTK_WINDOW(window), split_layout_widget(layout));
+    gtk_window_present(GTK_WINDOW(window));
+    settle_layout();
+    split_layout_focus(layout);
+    return window;
+}
+static void destroy_layout(GtkWidget *window, SplitLayout *layout) {
+    gtk_window_set_focus(GTK_WINDOW(window), NULL);
+    split_layout_free(layout);
+    gtk_window_destroy(GTK_WINDOW(window));
+}
+static GtkPaned *root_paned(SplitLayout *layout) {
+    GtkWidget *root = gtk_widget_get_first_child(split_layout_widget(layout));
+    g_assert_true(GTK_IS_PANED(root));
+    return GTK_PANED(root);
+}
+static int extent(GtkWidget *widget, GtkOrientation orientation) {
+    return orientation == GTK_ORIENTATION_HORIZONTAL ? gtk_widget_get_width(widget) : gtk_widget_get_height(widget);
+}
+static void assert_near(int actual, int expected) { g_assert_cmpint(ABS(actual - expected), <=, 2); }
+static void assert_ratio(GtkPaned *paned, double ratio) {
+    GtkOrientation orientation = gtk_orientable_get_orientation(GTK_ORIENTABLE(paned));
+    int first = extent(gtk_paned_get_start_child(paned), orientation);
+    int second = extent(gtk_paned_get_end_child(paned), orientation);
+    g_assert_cmpint(first, >, 30); g_assert_cmpint(second, >, 30);
+    assert_near(first, (int)((first + second) * ratio + 0.5));
+}
+static void select_pane(SplitLayout *layout, TerminalPane *pane) {
+    pane_focus(pane); settle_layout();
+    g_assert_true(split_layout_active(layout) == pane);
+}
+static void test_repeated_split_geometry(gconstpointer data) {
+    GtkOrientation orientation = GPOINTER_TO_INT(data);
+    SplitLayout *layout = split_layout_new(NULL, NULL, NULL);
+    TerminalPane *first = split_layout_active(layout);
+    GtkWidget *window = present_layout(layout);
+    split_layout_split(layout, orientation); settle_layout();
+    GtkPaned *root = root_paned(layout);
+    assert_ratio(root, 0.5);
+    int initial_extent = extent(pane_widget(first), orientation);
+    TerminalPane *second = split_layout_active(layout);
+    split_layout_split(layout, orientation); settle_layout();
+    TerminalPane *third = split_layout_active(layout);
+    assert_near(extent(pane_widget(first), orientation), initial_extent);
+    assert_ratio(root, 0.5);
+    GtkPaned *nested = GTK_PANED(gtk_paned_get_end_child(root));
+    assert_ratio(nested, 0.5);
+
+    /* Simulate divider positions chosen by the user, then split another leaf. */
+    gtk_paned_set_position(root, initial_extent * 2 / 3); settle_layout();
+    int nested_extent = extent(GTK_WIDGET(nested), orientation);
+    gtk_paned_set_position(nested, nested_extent * 2 / 3); settle_layout();
+    int root_position = gtk_paned_get_position(root);
+    int second_extent = extent(pane_widget(second), orientation);
+    int third_extent = extent(pane_widget(third), orientation);
+    select_pane(layout, first);
+    split_layout_split(layout, orientation); settle_layout();
+    assert_near(gtk_paned_get_position(root), root_position);
+    assert_near(extent(pane_widget(second), orientation), second_extent);
+    assert_near(extent(pane_widget(third), orientation), third_extent);
+    assert_ratio(GTK_PANED(gtk_paned_get_start_child(root)), 0.5);
+
+    double root_ratio = (double)root_position / (root_position + nested_extent);
+    double nested_ratio = (double)second_extent / (second_extent + third_extent);
+    gtk_window_set_default_size(GTK_WINDOW(window), 1440, 960); settle_layout();
+    assert_ratio(root, root_ratio); assert_ratio(nested, nested_ratio);
+    assert_ratio(GTK_PANED(gtk_paned_get_start_child(root)), 0.5);
+    root_position = gtk_paned_get_position(root);
+    second_extent = extent(pane_widget(second), orientation);
+    third_extent = extent(pane_widget(third), orientation);
+    split_layout_close_active(layout); settle_layout();
+    g_assert_true(gtk_paned_get_start_child(root) == pane_widget(first));
+    assert_near(gtk_paned_get_position(root), root_position);
+    assert_near(extent(pane_widget(second), orientation), second_extent);
+    assert_near(extent(pane_widget(third), orientation), third_extent);
+    select_pane(layout, second);
+    split_layout_close_active(layout); settle_layout();
+    g_assert_true(gtk_paned_get_end_child(root) == pane_widget(third));
+    assert_near(gtk_paned_get_position(root), root_position);
+    destroy_layout(window, layout);
+}
+static void test_mixed_split_geometry(void) {
+    SplitLayout *layout = split_layout_new(NULL, NULL, NULL);
+    TerminalPane *first = split_layout_active(layout);
+    GtkWidget *window = present_layout(layout);
+    split_layout_split(layout, GTK_ORIENTATION_HORIZONTAL); settle_layout();
+    TerminalPane *second = split_layout_active(layout);
+    split_layout_split(layout, GTK_ORIENTATION_VERTICAL); settle_layout();
+    GtkPaned *root = root_paned(layout);
+    GtkPaned *right = GTK_PANED(gtk_paned_get_end_child(root));
+    assert_ratio(root, 0.5); assert_ratio(right, 0.5);
+    select_pane(layout, second);
+    split_layout_split(layout, GTK_ORIENTATION_HORIZONTAL); settle_layout();
+    assert_ratio(root, 0.5); assert_ratio(right, 0.5);
+    assert_ratio(GTK_PANED(gtk_paned_get_start_child(right)), 0.5);
+    split_layout_close_active(layout); settle_layout();
+    assert_ratio(root, 0.5); assert_ratio(right, 0.5);
+    select_pane(layout, first);
+    split_layout_split(layout, GTK_ORIENTATION_VERTICAL); settle_layout();
+    assert_ratio(root, 0.5); assert_ratio(right, 0.5);
+    assert_ratio(GTK_PANED(gtk_paned_get_start_child(root)), 0.5);
+    split_layout_close_active(layout); settle_layout();
+    select_pane(layout, first);
+    /* Promote a surviving split subtree, retaining its internal ratio. */
+    split_layout_close_active(layout); settle_layout();
+    g_assert_true(root_paned(layout) == right);
+    assert_ratio(right, 0.5);
+    destroy_layout(window, layout);
+}
+static void test_deferred_split_geometry(void) {
+    SplitLayout *layout = split_layout_new(NULL, NULL, NULL);
+    /* Repeated clicks can arrive before the next allocation or before mapping. */
+    split_layout_split(layout, GTK_ORIENTATION_HORIZONTAL);
+    split_layout_split(layout, GTK_ORIENTATION_HORIZONTAL);
+    GtkWidget *window = present_layout(layout);
+    GtkPaned *root = root_paned(layout);
+    GtkPaned *nested = GTK_PANED(gtk_paned_get_end_child(root));
+    assert_ratio(root, 0.5); assert_ratio(nested, 0.5);
+    gtk_widget_set_visible(window, FALSE);
+    split_layout_split(layout, GTK_ORIENTATION_VERTICAL);
+    /* Remove an uninitialized split while hidden, then initialize another. */
+    split_layout_close_active(layout);
+    split_layout_split(layout, GTK_ORIENTATION_VERTICAL);
+    gtk_window_present(GTK_WINDOW(window)); settle_layout();
+    assert_ratio(root, 0.5); assert_ratio(nested, 0.5);
+    assert_ratio(GTK_PANED(gtk_paned_get_end_child(nested)), 0.5);
+    split_layout_split(layout, GTK_ORIENTATION_HORIZONTAL);
+    destroy_layout(window, layout);
+}
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     if (!gtk_init_check()) return 77;
     g_test_add_func("/layout/directory-and-isolation", test_directory_and_isolation);
     g_test_add_func("/layout/close-during-spawn", test_close_during_spawn);
+    g_test_add_data_func("/layout/repeated-split-right", GINT_TO_POINTER(GTK_ORIENTATION_HORIZONTAL), test_repeated_split_geometry);
+    g_test_add_data_func("/layout/repeated-split-down", GINT_TO_POINTER(GTK_ORIENTATION_VERTICAL), test_repeated_split_geometry);
+    g_test_add_func("/layout/mixed-split-geometry", test_mixed_split_geometry);
+    g_test_add_func("/layout/deferred-split-geometry", test_deferred_split_geometry);
     return g_test_run();
 }
