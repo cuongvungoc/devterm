@@ -5,10 +5,12 @@
 typedef struct TerminalPane TerminalPane;
 typedef void (*PaneEvent)(TerminalPane *pane, const char *message, gpointer user_data);
 
-TerminalPane *pane_new(PaneEvent selected, PaneEvent status, gpointer user_data);
+TerminalPane *pane_new(const char *working_directory, PaneEvent selected, PaneEvent status, gpointer user_data);
 GtkWidget *pane_widget(TerminalPane *pane);
 void pane_set_active(TerminalPane *pane, gboolean active);
 void pane_focus(TerminalPane *pane);
 gboolean pane_is_running(TerminalPane *pane);
+gboolean pane_has_live_session(TerminalPane *pane);
+char *pane_dup_working_directory(TerminalPane *pane);
 void pane_send(TerminalPane *pane, const char *command, gboolean send_enter);
 void pane_close(TerminalPane *pane);

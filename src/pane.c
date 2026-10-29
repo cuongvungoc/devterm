@@ -11,7 +11,9 @@ struct TerminalPane {
     GPid child;
     gboolean closed;
     gboolean running;
+    gboolean starting;
     gboolean exited;
+    char *working_directory;
     PaneEvent selected;
     PaneEvent status;
     gpointer user_data;
@@ -21,6 +23,7 @@ static TerminalPane *pane_ref(TerminalPane *p) { p->refs++; return p; }
 static void pane_unref(TerminalPane *p) {
     if (--p->refs) return;
     g_object_unref(p->root);
+    g_free(p->working_directory);
     g_free(p);
 }
 
@@ -44,6 +47,7 @@ static void on_exit(VteTerminal *terminal, int status, gpointer data) {
     (void)terminal;
     TerminalPane *p = data;
     p->running = FALSE;
+    p->starting = FALSE;
     p->exited = TRUE;
     p->child = 0;
     if (p->closed) return;
@@ -66,6 +70,7 @@ static void on_label_click(GtkGestureClick *gesture, int presses, double x, doub
 static void on_spawn(VteTerminal *terminal, GPid pid, GError *error, gpointer data) {
     (void)terminal;
     TerminalPane *p = data;
+    p->starting = FALSE;
     if (p->closed) {
         if (pid > 0) kill(pid, SIGHUP);
     } else if (error) {
@@ -83,12 +88,14 @@ static void on_spawn(VteTerminal *terminal, GPid pid, GError *error, gpointer da
     pane_unref(p);
 }
 
-TerminalPane *pane_new(PaneEvent selected, PaneEvent status, gpointer user_data) {
+TerminalPane *pane_new(const char *working_directory, PaneEvent selected, PaneEvent status, gpointer user_data) {
     TerminalPane *p = g_new0(TerminalPane, 1);
     p->refs = 1;
     p->selected = selected;
     p->status = status;
     p->user_data = user_data;
+    p->working_directory = g_strdup(working_directory && g_path_is_absolute(working_directory) &&
+                                   g_file_test(working_directory, G_FILE_TEST_IS_DIR) ? working_directory : g_get_home_dir());
     p->root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     g_object_ref_sink(p->root);
     gtk_widget_add_css_class(p->root, "terminal-pane");
@@ -127,7 +134,8 @@ TerminalPane *pane_new(PaneEvent selected, PaneEvent status, gpointer user_data)
     if (!shell || !g_path_is_absolute(shell) || !g_file_test(shell, G_FILE_TEST_IS_REGULAR) ||
         !g_file_test(shell, G_FILE_TEST_IS_EXECUTABLE)) shell = "/bin/sh";
     char *argv[] = {(char *)shell, NULL};
-    vte_terminal_spawn_async(p->terminal, VTE_PTY_DEFAULT, g_get_home_dir(), argv, NULL,
+    p->starting = TRUE;
+    vte_terminal_spawn_async(p->terminal, VTE_PTY_DEFAULT, p->working_directory, argv, NULL,
                              G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, NULL, on_spawn, pane_ref(p));
     return p;
 }
@@ -139,6 +147,19 @@ void pane_set_active(TerminalPane *p, gboolean active) {
 }
 void pane_focus(TerminalPane *p) { if (!p->closed) gtk_widget_grab_focus(GTK_WIDGET(p->terminal)); }
 gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && p->running; }
+gboolean pane_has_live_session(TerminalPane *p) { return p && !p->closed && (p->starting || p->running); }
+char *pane_dup_working_directory(TerminalPane *p) {
+    /* Read the local shell process, never a remote OSC 7 directory from SSH. */
+    if (p && !p->closed && p->child > 0) {
+        char *proc_path = g_strdup_printf("/proc/%ld/cwd", (long)p->child);
+        char *directory = g_file_read_link(proc_path, NULL);
+        g_free(proc_path);
+        if (directory && g_path_is_absolute(directory) && g_file_test(directory, G_FILE_TEST_IS_DIR)) return directory;
+        g_free(directory);
+    }
+    if (p && !p->closed && p->starting) return g_strdup(p->working_directory);
+    return g_strdup(g_get_home_dir());
+}
 void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
     vte_terminal_feed_child(p->terminal, command, -1);
     if (send_enter) vte_terminal_feed_child(p->terminal, "\r", 1);
