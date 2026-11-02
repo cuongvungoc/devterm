@@ -12,10 +12,18 @@ static void settle(void) {
     gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
     while (g_get_monotonic_time() < deadline) iterate();
 }
+static GtkWidget *find_widget(GtkWidget *root, GType type) {
+    if (G_TYPE_CHECK_INSTANCE_TYPE(root, type)) return root;
+    for (GtkWidget *child = gtk_widget_get_first_child(root); child; child = gtk_widget_get_next_sibling(child)) {
+        GtkWidget *found = find_widget(child, type);
+        if (found) return found;
+    }
+    return NULL;
+}
 static VteTerminal *terminal(TerminalPane *pane) {
-    for (GtkWidget *child = gtk_widget_get_first_child(pane_widget(pane)); child; child = gtk_widget_get_next_sibling(child))
-        if (VTE_IS_TERMINAL(child)) return VTE_TERMINAL(child);
-    g_assert_not_reached();
+    GtkWidget *widget = find_widget(pane_widget(pane), VTE_TYPE_TERMINAL);
+    g_assert_nonnull(widget);
+    return VTE_TERMINAL(widget);
 }
 static TerminalPane *new_pane(void) {
     TerminalPane *pane = pane_new(NULL, NULL, NULL, NULL);
@@ -97,6 +105,58 @@ static void test_scrollback_clipboard(void) {
     g_assert_nonnull(strstr(all, "\nend-of-limit-test"));
     g_free(all); g_string_free(output, TRUE); close_pane(pane);
 }
+static void test_scrollbar_history(void) {
+    TerminalPane *first = new_pane(), *second = new_pane();
+    GtkWidget *bar = find_widget(pane_widget(first), GTK_TYPE_SCROLLBAR);
+    GtkWidget *other_bar = find_widget(pane_widget(second), GTK_TYPE_SCROLLBAR);
+    g_assert_nonnull(bar); g_assert_nonnull(other_bar);
+    g_assert_true(gtk_widget_get_mapped(bar));
+    g_assert_true(gtk_widget_get_mapped(other_bar));
+    int bar_width = gtk_widget_get_width(bar);
+    g_assert_cmpint(bar_width, >, 0);
+    graphene_rect_t text_bounds, bar_bounds;
+    g_assert_true(gtk_widget_compute_bounds(GTK_WIDGET(terminal(first)), pane_widget(first), &text_bounds));
+    g_assert_true(gtk_widget_compute_bounds(bar, pane_widget(first), &bar_bounds));
+    g_assert_cmpfloat(bar_bounds.origin.x, >=, text_bounds.origin.x + text_bounds.size.width);
+
+    GString *output = g_string_new("scrollbar-search-target\r\n");
+    for (int i = 0; i < 500; i++) g_string_append_printf(output, "history %d\r\n", i);
+    g_string_append(output, "scrollbar-end-marker");
+    feed(first, output->str, "scrollbar-end-marker"); settle();
+    GtkAdjustment *scroll = gtk_scrollbar_get_adjustment(GTK_SCROLLBAR(bar));
+    double bottom = gtk_adjustment_get_upper(scroll) - gtk_adjustment_get_page_size(scroll);
+    g_assert_cmpfloat(bottom, >, gtk_adjustment_get_lower(scroll) + 100);
+    g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(scroll), bottom, 1);
+    gtk_adjustment_set_value(scroll, gtk_adjustment_get_lower(scroll) + 20); settle();
+    double position = gtk_adjustment_get_value(scroll);
+    feed(first, "\r\nnew-output-while-reading\r\n", "new-output-while-reading"); settle();
+    g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(scroll), position, 1);
+    GtkAdjustment *other = gtk_scrollbar_get_adjustment(GTK_SCROLLBAR(other_bar));
+    g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_upper(other), gtk_adjustment_get_page_size(other), 1);
+    g_assert_cmpint(gtk_widget_get_width(bar), ==, bar_width);
+
+    bottom = gtk_adjustment_get_upper(scroll) - gtk_adjustment_get_page_size(scroll);
+    gtk_adjustment_set_value(scroll, bottom); settle();
+    feed(first, "bottom-follow-marker\r\n", "bottom-follow-marker"); settle();
+    g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(scroll),
+        gtk_adjustment_get_upper(scroll) - gtk_adjustment_get_page_size(scroll), 1);
+    pane_search_open(first);
+    GtkWidget *entry = find_widget(pane_widget(first), GTK_TYPE_ENTRY);
+    gtk_editable_set_text(GTK_EDITABLE(entry), "scrollbar-search-target");
+    gint64 deadline = g_get_monotonic_time() + 3 * G_TIME_SPAN_SECOND;
+    while (!vte_terminal_get_has_selection(terminal(first)) && g_get_monotonic_time() < deadline) iterate();
+    g_assert_true(vte_terminal_get_has_selection(terminal(first))); settle();
+    g_assert_cmpfloat(gtk_adjustment_get_value(scroll), <, bottom);
+
+    pane_send(first, "exit", TRUE);
+    deadline = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (pane_has_live_session(first) && g_get_monotonic_time() < deadline) iterate();
+    g_assert_false(pane_has_live_session(first));
+    gtk_adjustment_set_value(scroll, gtk_adjustment_get_lower(scroll)); settle();
+    g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(scroll), gtk_adjustment_get_lower(scroll), 1);
+    g_assert_true(gtk_widget_get_mapped(bar));
+    g_string_free(output, TRUE); close_pane(first); close_pane(second);
+}
 static void test_wrapping_resize(void) {
     TerminalPane *pane = new_pane();
     GString *line = g_string_new("long-line:");
@@ -163,6 +223,7 @@ int main(int argc, char **argv) {
     host = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_window_set_child(GTK_WINDOW(window), host); gtk_window_present(GTK_WINDOW(window));
     g_test_add_func("/contents/scrollback-clipboard", test_scrollback_clipboard);
+    g_test_add_func("/contents/scrollbar-history", test_scrollbar_history);
     g_test_add_func("/contents/wrapping-resize", test_wrapping_resize);
     g_test_add_func("/contents/snapshot-lifetime-alternate", test_snapshot_lifetime_and_alternate);
     int result = g_test_run(); gtk_window_destroy(GTK_WINDOW(window)); return result;

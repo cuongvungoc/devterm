@@ -19,15 +19,11 @@ Phiên bản đã kiểm tra: GTK 4.14.5, VTE GTK4 0.76.0, JSON-GLib 1.8.0, libs
 
 Build tạo hai executable `devterm` và `devterm-connect`; giữ chúng cùng thư mục khi chạy hoặc phân phối. `meson install -C build` cài cả hai. `ssh`, `telnet` và `picocom` chỉ cần khi sử dụng giao thức tương ứng.
 
-Build với dependency trong `/tmp`
-```bash
-env \
-  PKG_CONFIG_SYSROOT_DIR=/tmp/devterm-sysroot \
-  PKG_CONFIG_LIBDIR=/tmp/devterm-sysroot/usr/lib/x86_64-linux-gnu/pkgconfig:/tmp/devterm-sysroot/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-  LD_LIBRARY_PATH=/tmp/devterm-sysroot/usr/lib/x86_64-linux-gnu \
-  PYTHONPATH=/tmp/devterm-sysroot/usr/lib/python3/dist-packages \
-  PATH=/tmp/devterm-sysroot/usr/bin:$PATH \
-  meson compile -C build
+Nếu thư mục `build` được tạo trước đây với dependency giải nén trong `/tmp`, sau khi cài dependency bằng apt cần xóa cache đường dẫn cũ và cấu hình lại:
+
+```sh
+meson setup --reconfigure --clearcache build
+meson compile -C build
 ```
 
 ## Sử dụng
@@ -39,6 +35,7 @@ env \
 - **Close Pane** đóng pane đang chọn và thu gọn bố cục. Nếu đó là pane cuối, thao tác sẽ đóng tab. Nút **×** trên tab hoặc **Ctrl+Shift+W** đóng toàn bộ tab. Khi tab còn shell đang chạy hoặc khởi động, ứng dụng hỏi xác nhận; chọn **Cancel** để giữ tab, **Close Tab** để kết thúc tất cả pane trong tab đó. Đóng pane riêng trong tab có nhiều pane vẫn thực hiện ngay.
 - Đóng tab cuối giữ cửa sổ ở trạng thái trống với nút **New Terminal**. Shell tự thoát sẽ giữ pane cùng output để xem lại; đóng tab không còn shell sống sẽ không hỏi xác nhận. Tab và bố cục không được khôi phục sau khi thoát ứng dụng.
 - **Ctrl+Shift+C** sao chép vùng chọn, **Ctrl+Shift+V** dán từ clipboard. VTE xử lý màu ANSI, scrollback và kích thước PTY.
+- Mỗi pane có **scrollbar dọc luôn hiện bên phải**, dùng để kéo nhanh trong buffer còn giữ. Khi chưa có lịch sử để cuộn, scrollbar vẫn chiếm cùng chiều rộng và không kéo được. Kéo scrollbar chọn pane tương ứng và giữ focus nhập liệu ở terminal; các pane/tab khác có vị trí cuộn riêng. Đang đọc lịch sử thì output mới giữ vị trí, trong giới hạn buffer; kéo về cuối sẽ tiếp tục theo dõi output. Gõ phím vào terminal đưa màn hình về cuối; gõ trong ô Search vẫn dành cho tìm kiếm. Pane đã shell exit/ngắt kết nối vẫn cuộn xem được. Với màn hình thay thế như `vim`/`top`, scrollbar không truy cập lịch sử nội bộ của chương trình đó.
 - **Copy All Text** sao chép toàn bộ văn bản còn lưu trong pane đang chọn, gồm màn hình và scrollback, vào clipboard. Vùng chọn và vị trí cuộn hiện tại được giữ nguyên; **Ctrl+Shift+C** vẫn chỉ sao chép vùng chọn.
 - **Export Text…** chụp nội dung pane ngay khi bấm, rồi mở hộp thoại Save để chọn tên và vị trí lưu. Tên gợi ý là `devterm-YYYYMMDD-HHMMSS.txt`; hộp thoại hỏi xác nhận khi chọn ghi đè. Hủy hộp thoại không tạo file. Export vẫn dùng bản chụp ban đầu nếu có output mới, đổi tab hoặc đóng pane trong khi thao tác đang chờ.
 - Copy All Text và Export Text lấy cùng định dạng văn bản UTF-8, xuống dòng LF, không màu/ANSI, không thêm tiêu đề. Dòng dài bị bọc theo chiều rộng terminal được nối lại thành dòng logic. Nội dung gồm prompt, input được hiển thị và output; không gửi input vào shell, không dừng chương trình đang chạy. Pane đã shell exit vẫn copy/xuất được.
@@ -119,12 +116,12 @@ DevTerm không tự chạy command khi đọc file. Nếu JSON lỗi, phiên b�
 
 ## Kiểm thử
 
-`meson test` có tám nhóm kiểm tra (42 test khi có đủ dependency và display):
+`meson test` có tám nhóm kiểm tra (43 test khi có đủ dependency và display):
 
 - `commands`: 4 test cho round-trip Unicode, dấu nháy, shell operators, thứ tự, `send_enter`, đường dẫn XDG, dữ liệu lỗi và lỗi ghi file vẫn giữ nguyên nội dung cũ.
 - `layout`: 6 test tích hợp với shell/PTY thật cho bố cục độc lập, kế thừa thư mục có dấu cách, bỏ qua thông tin thư mục remote, fallback sau shell exit và giải phóng pane khi spawn chưa hoàn tất. Các test hình học dùng cửa sổ được hiển thị thật để đo chia đôi khi split phải/xuống liên tiếp, split khác hướng, chọn lại pane cũ, giữ divider đã chỉnh khi resize/đóng pane, split nhiều lần trước khi bố trí và đóng split đang chờ khi cửa sổ bị ẩn. Nhóm này tự bỏ qua nếu không có display; cần X11 hoặc Wayland để chạy đầy đủ.
 - `search`: 4 test với VTE thật cho Unicode, ký tự regex được tìm nguyên văn, scrollback, Match case, Find whole words only (gồm chữ số, `_`, dấu Unicode dạng tổ hợp và kết hợp Match case), trước/sau/quay vòng, trạng thái độc lập giữa pane, search sau shell exit, pane bị ẩn rồi hiển thị lại và đóng pane khi search đang chờ. Nhóm này cũng tự bỏ qua nếu không có display.
-- `contents`: 3 test với VTE thật cho clipboard khớp snapshot, Unicode, bỏ ANSI, lấy scrollback khi đang cuộn ở đầu, giữ vùng chọn/vị trí cuộn, loại nội dung đã vượt giới hạn buffer, dòng dài sau resize, buffer độc lập giữa pane, snapshot không đổi khi có output mới/đóng pane, màn hình thay thế và shell exit. Cần display để chạy nhóm này.
+- `contents`: 4 test với VTE thật cho clipboard khớp snapshot, Unicode, bỏ ANSI, lấy scrollback khi đang cuộn ở đầu, giữ vùng chọn/vị trí cuộn, loại nội dung đã vượt giới hạn buffer, dòng dài sau resize, buffer độc lập giữa pane, snapshot không đổi khi có output mới/đóng pane, màn hình thay thế và shell exit. Ca scrollbar kiểm tra vị trí bên phải, luôn hiện/kích thước ổn định, giữ vị trí khi có output, theo dõi output ở cuối, đồng bộ Search, độc lập giữa pane và cuộn sau shell exit. Cần display để chạy nhóm này.
 - `export`: 5 test cho ghi UTF-8 và tên file Unicode, thay file atomic (kiểm tra qua hard link), quyền file, hủy trước khi lưu, lỗi lúc commit, thư mục không ghi được và từ chối đường dẫn không phải local. Nhóm này không cần GUI; test quyền ghi tự bỏ qua nếu chạy bằng root.
 - `sessions`: 5 test cho round-trip Unicode/thứ tự, dữ liệu lỗi và giữ file cũ, liên kết credential theo endpoint, descriptor RAM đã seal và state machine prompt phân mảnh/ANSI/password-only/từ chối đăng nhập.
 - `session-ui`: 3 test GTK cho thêm/nhân bản/xóa profile, nhập password, ghi nhớ từ hộp thoại Connect, lưu/lấy/xóa credential qua libsecret, hủy request khi đóng ứng dụng và giữ file cấu hình lỗi. Test chạy D-Bus và GNOME Keyring riêng với thư mục tạm, không dùng keyring thật của người dùng. Cần display và `gnome-keyring-daemon`.
@@ -139,7 +136,9 @@ python3 -m venv /tmp/devterm-test-venv
 PYTHONPATH="$(/tmp/devterm-test-venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" xvfb-run -a meson test -C build --print-errorlogs
 ```
 
-Build và đủ 42 test trong tám nhóm đã qua trên X11/Xvfb, không có test bị skip. Dependency được giải nén tạm từ gói Ubuntu 24.04 vào `/tmp` vì máy kiểm thử chưa cài bộ development system-wide. Kiểm tra giao diện trên X11/Xvfb đã xác nhận: nút New Terminal và phím tắt tạo tab riêng; tab mới kế thừa thư mục; split nhiều cấp; chuyển tab khôi phục đúng pane; Quick Commands chỉ gửi vào pane đang chọn trong tab hiện tại; Cancel giữ nguyên shell; Close Tab kết thúc các shell của tab đó; đóng pane cuối đưa về trạng thái trống; tạo lại tab ở home; đóng tab đã exit không hỏi xác nhận; đóng cửa sổ bằng yêu cầu chuẩn `WM_DELETE_WINDOW` thoát bình thường. Các kiểm tra cấu hình và Quick Commands của phiên bản trước cũng đã xác nhận thêm/sửa/xóa/đổi thứ tự, `send_enter=false`, shell exit và giữ nguyên file JSON lỗi.
+Ở phiên bản Sessions trước, build và đủ 42 test trong tám nhóm đã qua trên X11/Xvfb, không có test bị skip. Dependency khi đó được giải nén tạm từ gói Ubuntu 24.04 vào `/tmp`. Kiểm tra giao diện trên X11/Xvfb đã xác nhận: nút New Terminal và phím tắt tạo tab riêng; tab mới kế thừa thư mục; split nhiều cấp; chuyển tab khôi phục đúng pane; Quick Commands chỉ gửi vào pane đang chọn trong tab hiện tại; Cancel giữ nguyên shell; Close Tab kết thúc các shell của tab đó; đóng pane cuối đưa về trạng thái trống; tạo lại tab ở home; đóng tab đã exit không hỏi xác nhận; đóng cửa sổ bằng yêu cầu chuẩn `WM_DELETE_WINDOW` thoát bình thường. Các kiểm tra cấu hình và Quick Commands của phiên bản trước cũng đã xác nhận thêm/sửa/xóa/đổi thứ tự, `send_enter=false`, shell exit và giữ nguyên file JSON lỗi.
+
+Phiên bản scrollbar đã build bằng dependency cài trực tiếp trên hệ thống và qua đủ 14 test liên quan thuộc `layout`, `search`, `contents`, không có skip. Kiểm tra bổ sung trên X11/Xvfb bằng chuột/phím thật với chương trình foreground đọc PTY raw xác nhận: kéo scrollbar chọn đúng pane và giữ focus terminal; kéo không gửi input vào child; gõ phím trở về cuối; Quick Commands chỉ gửi vào pane vừa kéo; đóng pane trong lúc kéo không gây lỗi. Chưa kiểm tra thao tác scrollbar trên Wayland.
 
 Lỗi split liên tiếp ép pane về mép đã được tái hiện bằng test kích thước trước khi sửa. Sau khi sửa, cả 14 test đều qua trên X11/Xvfb; thao tác trên ứng dụng bằng nút toolbar và kéo chuột thật đã xác nhận split phải hai lần, kéo divider ngoài rồi split xuống hai lần vẫn giữ vị trí divider đã kéo. Các test hình học cũng kiểm tra resize, đóng pane và mở rộng nhánh split còn lại.
 
@@ -161,5 +160,6 @@ Checklist kiểm tra thủ công trên hệ thống cài dependency bình thư�
 10. Mở Search bằng nút và phím tắt trong các pane khác nhau; tìm Unicode, ký tự đặc biệt và nội dung trong scrollback; thử Match case, Find whole words only, Enter, Shift+Enter, Esc và đổi tab khi đang nhập query. Xác nhận query và các tùy chọn của từng pane được giữ riêng và Quick Commands vẫn gửi đúng pane khi ô search lấy focus.
 11. Dùng Copy All Text và Export Text ở các pane/tab khác nhau, cả khi shell đã exit; kiểm tra UTF-8, scrollback, dòng dài và nội dung chỉ thuộc pane đang chọn. Thử Cancel, ghi đè, lỗi quyền ghi, output tiếp tục chạy trong lúc mở Save và đóng cửa sổ khi Save còn mở.
 12. Thêm profile SSH/Telnet/Serial cho thiết bị thử nghiệm; kiểm tra prompt thực tế, username/password, timeout và initial Enter. Lưu password vào keyring, khởi động lại rồi Connect; sửa endpoint và kiểm tra không dùng lại password cũ. Thử sai password, keyring bị khóa, host key mới/thay đổi, cổng Serial bận/mất quyền và tháo thiết bị. Dùng Disconnect/Reconnect rồi đóng tab để xác nhận client dừng và output còn giữ.
+13. Tạo output dài ở nhiều pane, kéo scrollbar của pane chưa được chọn và bấm Quick Command; xác nhận đúng pane nhận input. Kéo lên khi output vẫn chạy, gõ phím để về cuối, thử kéo về cuối để tiếp tục theo dõi. Đổi tab, mở Search, split/resize/đóng pane và shell exit; xác nhận scrollbar luôn nằm bên phải, không phủ chữ và mỗi pane cuộn độc lập.
 
 Kiểm tra Sessions trên ứng dụng thật với X11/Xvfb và Telnet loopback đã xác nhận Connect mở tab mới, password không xuất hiện trong buffer Copy All Text, input remote hoạt động, split tạo shell local riêng và đóng pane remote dừng kết nối. Keyring và SSH dùng dịch vụ/server thử nghiệm riêng; Serial chỉ dùng PTY giả lập. Chưa kiểm tra router/server production, thiết bị Serial vật lý hoặc tương tác trên Wayland; chưa chạy `vim`, `top`, `ping` trong phiên kiểm thử tự động. Lỗi GDK từng ghi nhận khi kiểm thử đóng cửa sổ xuất phát từ việc hủy trực tiếp X surface bằng `xdotool windowclose`; kiểm tra lại bằng yêu cầu đóng chuẩn của window manager đã qua.

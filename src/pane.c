@@ -299,11 +299,28 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     gtk_box_append(GTK_BOX(p->root), p->label);
     p->terminal = VTE_TERMINAL(vte_terminal_new());
     vte_terminal_set_scrollback_lines(p->terminal, 10000);
+    vte_terminal_set_scroll_on_output(p->terminal, FALSE);
+    vte_terminal_set_scroll_on_keystroke(p->terminal, TRUE);
     vte_terminal_search_set_wrap_around(p->terminal, TRUE);
     build_search(p);
     gtk_widget_set_hexpand(GTK_WIDGET(p->terminal), TRUE);
     gtk_widget_set_vexpand(GTK_WIDGET(p->terminal), TRUE);
-    gtk_box_append(GTK_BOX(p->root), GTK_WIDGET(p->terminal));
+    GtkWidget *terminal_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_direction(terminal_row, GTK_TEXT_DIR_LTR);
+    gtk_widget_set_vexpand(terminal_row, TRUE);
+    gtk_box_append(GTK_BOX(terminal_row), GTK_WIDGET(p->terminal));
+    GtkWidget *scrollbar = gtk_scrollbar_new(GTK_ORIENTATION_VERTICAL,
+        gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(p->terminal)));
+    gtk_widget_set_focusable(scrollbar, FALSE);
+    gtk_accessible_update_property(GTK_ACCESSIBLE(scrollbar), GTK_ACCESSIBLE_PROPERTY_LABEL, "Pane scrollback", -1);
+    /* Observe the press before GtkRange claims a drag. Do not claim the
+     * sequence: the scrollbar must keep receiving its normal pointer events. */
+    click = gtk_gesture_click_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(click), GTK_PHASE_CAPTURE);
+    g_signal_connect(click, "pressed", G_CALLBACK(on_label_click), p);
+    gtk_widget_add_controller(scrollbar, GTK_EVENT_CONTROLLER(click));
+    gtk_box_append(GTK_BOX(terminal_row), scrollbar);
+    gtk_box_append(GTK_BOX(p->root), terminal_row);
     GtkEventController *focus = gtk_event_controller_focus_new();
     g_signal_connect(focus, "enter", G_CALLBACK(on_focus), p);
     gtk_widget_add_controller(p->root, focus);
