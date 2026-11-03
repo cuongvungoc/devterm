@@ -1,0 +1,65 @@
+/* Shared semantic colors are supplied by ui-style.c for both appearances. */
+.devterm-window, .devterm-dialog { background: @dt_bg; color: @dt_fg; }
+.devterm-window headerbar { background: @dt_surface; color: @dt_fg; border-bottom: 1px solid @dt_border; box-shadow: none; padding: 6px 12px; }
+.devterm-window .brand { font-size: 1.15em; font-weight: 700; }
+.devterm-window .brand-icon { color: @dt_accent; }
+.devterm-window button, .devterm-dialog button {
+  background-image: none; background-color: @dt_surface; color: @dt_fg;
+  border: 1px solid @dt_border; border-radius: 8px; box-shadow: none;
+  min-height: 30px; min-width: 24px; padding: 2px 10px; text-shadow: none;
+}
+.devterm-window button:hover, .devterm-dialog button:hover { background-color: @dt_hover; }
+.devterm-window button:active, .devterm-dialog button:active { background-color: @dt_soft; }
+.devterm-window button:checked { background-color: @dt_soft; color: @dt_accent; border-color: @dt_accent; }
+.devterm-window button:disabled, .devterm-dialog button:disabled { color: @dt_disabled; background-color: @dt_bg; }
+.devterm-window .primary, .devterm-dialog .suggested-action { background-color: @dt_accent; color: @dt_on_accent; border-color: @dt_accent; font-weight: 600; }
+.devterm-window .primary:hover, .devterm-dialog .suggested-action:hover { background-color: shade(@dt_accent, 1.08); }
+.devterm-window .danger, .devterm-dialog .danger, .devterm-dialog .destructive-action { color: @dt_danger; }
+.devterm-window button:focus-visible, .devterm-dialog button:focus-visible,
+.devterm-window entry:focus-within, .devterm-dialog entry:focus-within,
+.devterm-window textview:focus-visible { outline: 2px solid @dt_accent; outline-offset: 2px; }
+.devterm-window .flat { background: transparent; border-color: transparent; }
+.devterm-window .flat:hover { background: @dt_hover; }
+.devterm-window .workspace-tools { padding: 8px 12px; }
+.devterm-window .split-down-icon { transform: rotate(90deg); }
+.devterm-window .muted, .devterm-dialog .muted { color: @dt_muted; }
+.devterm-window .section-title, .devterm-dialog .section-title { font-weight: 600; }
+.devterm-window .caption, .devterm-dialog .caption { font-size: .9em; }
+.devterm-window notebook { background: transparent; }
+.devterm-window notebook > header { background: @dt_bg; border: none; padding: 0 12px; }
+.devterm-window notebook > header > tabs > tab { background: transparent; color: @dt_muted; border: none; border-bottom: 2px solid transparent; box-shadow: none; padding: 4px 8px; margin-right: 4px; min-height: 32px; }
+.devterm-window notebook > header > tabs > tab:checked { color: @dt_fg; background: @dt_surface; border-bottom-color: @dt_accent; border-radius: 8px 8px 0 0; }
+.devterm-window .tab-close { min-width: 20px; min-height: 24px; padding: 0 2px; }
+.devterm-window .tab-page { margin: 8px 12px 0; }
+.devterm-window paned > separator { background: @dt_border; min-width: 6px; min-height: 6px; border-radius: 3px; margin: 2px; }
+.terminal-pane { border: 2px solid #364356; border-radius: 8px; background: #101723; color: #E2E8F0; }
+.terminal-pane.active-pane { border-color: #5DD6C0; }
+.terminal-pane .pane-header { background: #1C2736; padding: 2px 10px; min-height: 28px; color: #CAD4E2; }
+.terminal-pane .pane-label { background: transparent; padding: 0; color: #CAD4E2; font-size: .9em; }
+.terminal-pane .pane-state { color: #9BE3D8; background: #203E40; border-radius: 5px; padding: 2px 6px; font-size: .85em; }
+.terminal-pane scrollbar { background: #101723; color: #CAD4E2; }
+.terminal-pane scrollbar slider { background: #687A91; min-width: 8px; min-height: 28px; border: 2px solid #101723; border-radius: 6px; }
+.terminal-pane scrollbar slider:hover { background: #9AACBF; }
+.terminal-pane .search-bar { background: @dt_surface; color: @dt_fg; padding: 8px; border-bottom: 1px solid @dt_border; }
+.devterm-window entry, .devterm-dialog entry, .devterm-dialog spinbutton,
+.devterm-dialog dropdown > button { background: @dt_surface; color: @dt_fg; border-color: @dt_border; border-radius: 7px; min-height: 30px; }
+.devterm-window .draft-panel { background: @dt_surface; color: @dt_fg; border: 1px solid @dt_border; border-radius: 8px; }
+.devterm-window .draft-header { padding: 4px 8px; border-bottom: 1px solid @dt_border; }
+.devterm-window .draft-editor, .devterm-window .draft-editor text { background: @dt_surface; color: @dt_fg; caret-color: @dt_accent; }
+.devterm-window .draft-editor { border-radius: 0 0 8px 8px; }
+.devterm-window .quick-dock { margin: 10px 12px 0; padding: 10px 12px; border: 1px solid @dt_border; border-radius: 10px; background: @dt_surface; }
+.devterm-window .quick-dock flowboxchild { padding: 0; }
+.devterm-window .quick-command { background: @dt_bg; }
+.devterm-window .status-bar { color: @dt_muted; padding: 8px 16px; font-size: .9em; }
+.devterm-window .empty-state { padding: 32px; }
+.devterm-window .empty-title, .devterm-dialog .dialog-title { font-size: 1.4em; font-weight: 700; }
+.devterm-window popover > contents { background: @dt_surface; color: @dt_fg; border: 1px solid @dt_border; border-radius: 10px; padding: 6px; }
+.devterm-window popover modelbutton { border-radius: 6px; min-height: 30px; padding: 4px 10px; }
+.devterm-window popover modelbutton:hover { background: @dt_hover; }
+.devterm-dialog .dialog-intro { margin-bottom: 8px; }
+.devterm-dialog .settings-list { border: 1px solid @dt_border; border-radius: 8px; background: @dt_surface; color: @dt_fg; }
+.devterm-dialog .settings-list row { border-bottom: 1px solid @dt_border; padding: 4px; }
+.devterm-dialog .command-row { border-bottom: 1px solid @dt_border; padding: 4px 10px; }
+.devterm-dialog .settings-list row:selected { background: @dt_soft; color: @dt_fg; }
+.devterm-dialog .protocol-badge { color: @dt_accent; background: @dt_soft; padding: 5px 8px; border-radius: 6px; font-size: .85em; font-weight: 600; }
+.devterm-dialog .error, .devterm-window .error { color: @dt_danger; }

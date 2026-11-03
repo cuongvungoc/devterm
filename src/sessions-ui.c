@@ -43,16 +43,27 @@ static SessionProfile *selected(SessionManager *m) {
     return i >= 0 ? m->profiles->pdata[i] : NULL;
 }
 static void refresh(SessionManager *m) {
-    GtkWidget *child; while ((child = gtk_widget_get_first_child(m->list))) gtk_list_box_remove(GTK_LIST_BOX(m->list), child);
+    for (GtkWidget *child = gtk_widget_get_first_child(m->list), *next; child; child = next) {
+        next = gtk_widget_get_next_sibling(child);
+        if (GTK_IS_LIST_BOX_ROW(child)) gtk_list_box_remove(GTK_LIST_BOX(m->list), child);
+    }
     for (guint i = 0; i < m->profiles->len; i++) {
         SessionProfile *p = m->profiles->pdata[i];
         const char *type = p->type == SESSION_SSH ? "SSH" : p->type == SESSION_TELNET ? "Telnet" : "Serial";
-        char *text = p->type == SESSION_SERIAL ? g_strdup_printf("%s — %s — %s (%d baud)", p->name, type, p->device, p->baud) :
-            g_strdup_printf("%s — %s — %s@%s:%d", p->name, type, p->username, p->host, p->port);
-        GtkWidget *row = gtk_list_box_row_new(), *label = gtk_label_new(text); g_free(text);
-        gtk_widget_set_halign(label, GTK_ALIGN_START); gtk_widget_set_margin_start(label, 8); gtk_widget_set_margin_end(label, 8);
-        gtk_widget_set_margin_top(label, 8); gtk_widget_set_margin_bottom(label, 8);
-        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), label);
+        char *text = p->type == SESSION_SERIAL ? g_strdup_printf("%s · %d baud", p->device, p->baud) :
+            g_strdup_printf("%s@%s:%d", p->username, p->host, p->port);
+        GtkWidget *row = gtk_list_box_row_new(), *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_widget_set_margin_start(content, 12); gtk_widget_set_margin_end(content, 12);
+        gtk_widget_set_margin_top(content, 10); gtk_widget_set_margin_bottom(content, 10);
+        GtkWidget *badge = gtk_label_new(type); gtk_widget_add_css_class(badge, "protocol-badge");
+        gtk_label_set_width_chars(GTK_LABEL(badge), 6); gtk_widget_set_valign(badge, GTK_ALIGN_CENTER); gtk_box_append(GTK_BOX(content), badge);
+        GtkWidget *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4); gtk_widget_set_hexpand(labels, TRUE);
+        GtkWidget *name = gtk_label_new(p->name); gtk_label_set_xalign(GTK_LABEL(name), 0);
+        gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END); gtk_widget_set_tooltip_text(name, p->name); gtk_widget_add_css_class(name, "section-title");
+        GtkWidget *endpoint = gtk_label_new(text); gtk_label_set_xalign(GTK_LABEL(endpoint), 0); gtk_widget_add_css_class(endpoint, "muted");
+        gtk_label_set_ellipsize(GTK_LABEL(endpoint), PANGO_ELLIPSIZE_END); gtk_widget_set_tooltip_text(endpoint, text); g_free(text);
+        gtk_box_append(GTK_BOX(labels), name); gtk_box_append(GTK_BOX(labels), endpoint); gtk_box_append(GTK_BOX(content), labels);
+        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), content);
         g_object_set_data_full(G_OBJECT(row), "profile-id", g_strdup(p->id), g_free);
         gtk_list_box_append(GTK_LIST_BOX(m->list), row);
     }
@@ -117,6 +128,7 @@ static void password_dialog(Connection *c, const char *detail) {
     if (!parent) { connection_free(c); return; }
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Session Password", parent, GTK_DIALOG_MODAL,
         "Cancel", GTK_RESPONSE_CANCEL, "Connect", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_widget_add_css_class(dialog, "devterm-dialog");
     g_object_unref(parent); gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
     g_object_set_data_full(G_OBJECT(dialog), "connection", c, connection_free);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dialog)); gtk_box_set_spacing(GTK_BOX(box), 8);
@@ -195,6 +207,7 @@ static void editor_visibility(GObject *object, GParamSpec *spec, gpointer data) 
 static void editor_toggled(GtkCheckButton *button, gpointer data) { editor_visibility(G_OBJECT(button), NULL, data); }
 static void editor_row(Editor *e, GtkBox *box, int field, const char *name, GtkWidget *widget) {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8), *label = gtk_label_new(name);
+    gtk_widget_add_css_class(label, "muted");
     gtk_widget_set_size_request(label, 185, -1); gtk_widget_set_halign(label, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(row), label); gtk_widget_set_hexpand(widget, TRUE); gtk_box_append(GTK_BOX(row), widget);
     e->fields[field] = widget; e->rows[field] = row; gtk_box_append(box, row);
@@ -242,6 +255,7 @@ static void edit_profile(SessionManager *m, SessionProfile *draft) {
     Editor *e = g_new0(Editor, 1); e->manager = manager_ref(m); e->original = draft;
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Session Profile", GTK_WINDOW(m->window), GTK_DIALOG_MODAL,
         "Cancel", GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_widget_add_css_class(dialog, "devterm-dialog");
     gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE); gtk_window_set_default_size(GTK_WINDOW(dialog), 700, 650);
     g_object_set_data_full(G_OBJECT(dialog), "editor", e, editor_free);
     GtkWidget *scroll = gtk_scrolled_window_new(); gtk_widget_set_vexpand(scroll, TRUE);
@@ -311,6 +325,8 @@ static void manager_destroyed(GtkWidget *window, gpointer data) {
 static void manager_response(GtkDialog *dialog, int response, gpointer data) { (void)response; (void)data; gtk_window_destroy(GTK_WINDOW(dialog)); }
 static void button(GtkBox *box, const char *label, GCallback callback, SessionManager *m, gboolean sensitive) {
     GtkWidget *w = gtk_button_new_with_label(label); gtk_widget_set_sensitive(w, sensitive);
+    if (g_str_equal(label, "Connect")) gtk_widget_add_css_class(w, "suggested-action");
+    if (g_str_equal(label, "Delete")) gtk_widget_add_css_class(w, "danger");
     g_signal_connect(w, "clicked", callback, m); gtk_box_append(box, w);
 }
 SessionManager *session_manager_new(GtkWindow *parent, SessionConnect connect, SessionCurrentAction current, gpointer data) {
@@ -325,16 +341,26 @@ void session_manager_show(SessionManager *m) {
     if (m->window) { gtk_window_present(GTK_WINDOW(m->window)); return; }
     GtkWindow *parent = g_weak_ref_get(&m->parent); if (!parent) return;
     m->window = gtk_dialog_new_with_buttons("Sessions", parent, 0, "Close", GTK_RESPONSE_CLOSE, NULL); g_object_unref(parent);
+    gtk_widget_add_css_class(m->window, "devterm-dialog");
     gtk_window_set_destroy_with_parent(GTK_WINDOW(m->window), TRUE); gtk_window_set_default_size(GTK_WINDOW(m->window), 800, 440);
     g_object_set_data_full(G_OBJECT(m->window), "manager", manager_ref(m), manager_unref);
     g_signal_connect(m->window, "destroy", G_CALLBACK(manager_destroyed), m); g_signal_connect(m->window, "response", G_CALLBACK(manager_response), m);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(m->window)); gtk_box_set_spacing(GTK_BOX(box), 8);
     gtk_widget_set_margin_start(box, 12); gtk_widget_set_margin_end(box, 12); gtk_widget_set_margin_top(box, 12); gtk_widget_set_margin_bottom(box, 12);
+    GtkWidget *title = gtk_label_new("Saved connections"); gtk_label_set_xalign(GTK_LABEL(title), 0); gtk_widget_add_css_class(title, "dialog-title"); gtk_box_append(GTK_BOX(box), title);
+    GtkWidget *intro = gtk_label_new("SSH, Telnet and Serial profiles. Connect opens a new terminal tab."); gtk_label_set_xalign(GTK_LABEL(intro), 0);
+    gtk_label_set_wrap(GTK_LABEL(intro), TRUE); gtk_widget_add_css_class(intro, "muted"); gtk_widget_add_css_class(intro, "dialog-intro"); gtk_box_append(GTK_BOX(box), intro);
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_append(GTK_BOX(box), row);
     button(GTK_BOX(row), "Add", G_CALLBACK(add_clicked), m, m->valid); button(GTK_BOX(row), "Edit", G_CALLBACK(edit_clicked), m, m->valid);
     button(GTK_BOX(row), "Duplicate", G_CALLBACK(duplicate_clicked), m, m->valid); button(GTK_BOX(row), "Delete", G_CALLBACK(delete_clicked), m, m->valid);
     button(GTK_BOX(row), "Connect", G_CALLBACK(connect_clicked), m, TRUE);
     GtkWidget *scroll = gtk_scrolled_window_new(); gtk_widget_set_vexpand(scroll, TRUE); m->list = gtk_list_box_new();
+    gtk_widget_add_css_class(m->list, "settings-list");
+    GtkWidget *empty = gtk_label_new("No saved connections yet. Use Add to create an SSH, Telnet or Serial profile.");
+    gtk_label_set_wrap(GTK_LABEL(empty), TRUE); gtk_widget_add_css_class(empty, "muted");
+    gtk_widget_set_margin_start(empty, 24); gtk_widget_set_margin_end(empty, 24);
+    gtk_widget_set_margin_top(empty, 32); gtk_widget_set_margin_bottom(empty, 32);
+    gtk_list_box_set_placeholder(GTK_LIST_BOX(m->list), empty);
     gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(m->list), FALSE);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), m->list); gtk_box_append(GTK_BOX(box), scroll);
     g_signal_connect(m->list, "row-activated", G_CALLBACK(row_activated), m);

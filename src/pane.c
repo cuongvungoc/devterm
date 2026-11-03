@@ -10,6 +10,7 @@ struct TerminalPane {
     GtkWidget *root;
     VteTerminal *terminal;
     GtkWidget *label;
+    GtkWidget *state;
     GtkWidget *search_box, *search_entry, *match_case, *whole_words, *search_message;
     GtkWidget *search_previous, *search_next;
     guint search_timeout;
@@ -184,6 +185,7 @@ static gboolean on_search_key(GtkEventControllerKey *controller, guint keyval, g
 }
 static void build_search(TerminalPane *p) {
     p->search_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_add_css_class(p->search_box, "search-bar");
     gtk_widget_set_margin_start(p->search_box, 4); gtk_widget_set_margin_end(p->search_box, 4);
     gtk_widget_set_margin_top(p->search_box, 4); gtk_widget_set_margin_bottom(p->search_box, 4);
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
@@ -195,14 +197,17 @@ static void build_search(TerminalPane *p) {
     gtk_box_append(GTK_BOX(row), p->search_entry);
     p->search_previous = gtk_button_new_from_icon_name("go-up-symbolic");
     gtk_widget_set_tooltip_text(p->search_previous, "Previous match (Shift+Enter)");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(p->search_previous), GTK_ACCESSIBLE_PROPERTY_LABEL, "Previous match", -1);
     g_signal_connect(p->search_previous, "clicked", G_CALLBACK(on_search_previous), p);
     gtk_box_append(GTK_BOX(row), p->search_previous);
     p->search_next = gtk_button_new_from_icon_name("go-down-symbolic");
     gtk_widget_set_tooltip_text(p->search_next, "Next match (Enter)");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(p->search_next), GTK_ACCESSIBLE_PROPERTY_LABEL, "Next match", -1);
     g_signal_connect(p->search_next, "clicked", G_CALLBACK(on_search_next), p);
     gtk_box_append(GTK_BOX(row), p->search_next);
     GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
     gtk_widget_set_tooltip_text(close, "Close search (Esc)");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(close), GTK_ACCESSIBLE_PROPERTY_LABEL, "Close search", -1);
     g_signal_connect(close, "clicked", G_CALLBACK(on_search_close), p);
     gtk_box_append(GTK_BOX(row), close);
     gtk_box_append(GTK_BOX(p->search_box), row);
@@ -290,14 +295,28 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     p->root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     g_object_ref_sink(p->root);
     gtk_widget_add_css_class(p->root, "terminal-pane");
+    gtk_widget_set_overflow(p->root, GTK_OVERFLOW_HIDDEN);
+    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_add_css_class(header, "pane-header");
     p->label = gtk_label_new(profile ? "Starting session…" : "Starting shell…");
-    gtk_widget_set_halign(p->label, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(p->label, TRUE); gtk_label_set_xalign(GTK_LABEL(p->label), 0);
+    gtk_label_set_ellipsize(GTK_LABEL(p->label), PANGO_ELLIPSIZE_END);
     gtk_widget_add_css_class(p->label, "pane-label");
+    p->state = gtk_label_new("Selected"); gtk_widget_add_css_class(p->state, "pane-state");
+    gtk_widget_set_visible(p->state, FALSE);
+    gtk_box_append(GTK_BOX(header), p->label); gtk_box_append(GTK_BOX(header), p->state);
     GtkGesture *click = gtk_gesture_click_new();
     g_signal_connect(click, "pressed", G_CALLBACK(on_label_click), p);
-    gtk_widget_add_controller(p->label, GTK_EVENT_CONTROLLER(click));
-    gtk_box_append(GTK_BOX(p->root), p->label);
+    gtk_widget_add_controller(header, GTK_EVENT_CONTROLLER(click));
+    gtk_box_append(GTK_BOX(p->root), header);
     p->terminal = VTE_TERMINAL(vte_terminal_new());
+    GdkRGBA foreground, background, cursor, palette[16];
+    gdk_rgba_parse(&foreground, "#E2E8F0"); gdk_rgba_parse(&background, "#101723"); gdk_rgba_parse(&cursor, "#5DD6C0");
+    const char *colors[] = {"#202B3B", "#FCA5A5", "#86EFAC", "#FDE68A", "#93C5FD", "#C4B5FD", "#67E8F9", "#CBD5E1",
+        "#8293AA", "#FECACA", "#BBF7D0", "#FEF3C7", "#BFDBFE", "#DDD6FE", "#A5F3FC", "#F8FAFC"};
+    for (guint i = 0; i < G_N_ELEMENTS(colors); i++) gdk_rgba_parse(&palette[i], colors[i]);
+    vte_terminal_set_colors(p->terminal, &foreground, &background, palette, 16);
+    vte_terminal_set_color_cursor(p->terminal, &cursor);
     vte_terminal_set_scrollback_lines(p->terminal, 10000);
     vte_terminal_set_scroll_on_output(p->terminal, FALSE);
     vte_terminal_set_scroll_on_keystroke(p->terminal, TRUE);
@@ -379,6 +398,7 @@ void pane_disconnect(TerminalPane *p) {
 
 GtkWidget *pane_widget(TerminalPane *p) { return p->root; }
 void pane_set_active(TerminalPane *p, gboolean active) {
+    gtk_widget_set_visible(p->state, active);
     if (active) gtk_widget_add_css_class(p->root, "active-pane");
     else gtk_widget_remove_css_class(p->root, "active-pane");
 }
