@@ -1,0 +1,121 @@
+{
+  "snapshot": "2026-11-06",
+  "origin": "Ubuntu noble, noble-updates and noble-security signed source indexes",
+  "components": [
+    {
+      "name": "glib2.0",
+      "version": "2.80.0-6ubuntu3.10",
+      "files": [
+        {
+          "filename": "glib2.0_2.80.0.orig-unicode-data.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.80.0.orig-unicode-data.tar.xz",
+          "hash": "sha512:1d1c00d7416d90aac86d851fc2df94f2a97cb100a3b99f2ac28a0660deea64b994f56bbc7c05b6c7ef3b6c3a2cb18267ebc5d189abf58bd922321b509c86e2b6"
+        },
+        {
+          "filename": "glib2.0_2.80.0.orig.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.80.0.orig.tar.xz",
+          "hash": "sha512:1514d62aeb4c4a1a1048ae0f84f7db7f0dbf355772b2dadf6a34ec547045b163a5e28331b096e7616fe3c9c19bed98025a0202b05073f5d7ee901d0efaffe143"
+        },
+        {
+          "filename": "glib2.0_2.80.0-6ubuntu3.10.debian.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.80.0-6ubuntu3.10.debian.tar.xz",
+          "hash": "sha512:c75e75f0bbb451356288abc09d9bd2d6a822938035c3e4324178e6d3bd1942e7100c85c09b1c81a84695d7624b56c33749f66cfe95e9e795e889d0316ba3b2a2"
+        },
+        {
+          "filename": "glib2.0_2.80.0-6ubuntu3.10.dsc",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.80.0-6ubuntu3.10.dsc",
+          "hash": "sha512:95e6a37b24d48bc66070a8d8b29be544677ef43593ac8ca92dc8a77f1faa9d4fc6be957d7af1a8c15b381157290a441ccff7ccaabed217d0033985e2511c5922"
+        }
+      ]
+    },
+    {
+      "name": "wayland",
+      "version": "1.22.0-2.1build1",
+      "files": [
+        {
+          "filename": "wayland_1.22.0-2.1build1.dsc",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland/wayland_1.22.0-2.1build1.dsc",
+          "hash": "sha512:ceaa6962707af8ed645e4b39d7de665134fd09659994549ad268faf6331c37ff2128c90cd1627bf73296e89774c06494e21c26929f0f2c3136e0990339ba06a9"
+        },
+        {
+          "filename": "wayland_1.22.0.orig.tar.gz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland/wayland_1.22.0.orig.tar.gz",
+          "hash": "sha512:81e03cec2dd33cb7bf9c859062c5b9e239c1e3cc7fab75ffcfe3b8117ad242e9f32a7be599e99adba66d468fcb49d74a891b2cc3d158a1d58509b094c0364733"
+        },
+        {
+          "filename": "wayland_1.22.0-2.1build1.diff.gz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland/wayland_1.22.0-2.1build1.diff.gz",
+          "hash": "sha512:9ad84ff68e8802209ab3953fb6b5472a30ac7dd11ba7bb58f7179eb0e324840c79b6fc4c27cad0c78774878bdc8bbe079f1f2050470a3b1f9b6634659a664977"
+        }
+      ]
+    },
+    {
+      "name": "wayland-protocols",
+      "version": "1.45-1~ubuntu0.24.04.2",
+      "files": [
+        {
+          "filename": "wayland-protocols_1.45.orig.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland-protocols/wayland-protocols_1.45.orig.tar.xz",
+          "hash": "sha512:d0557a75eb486fb824f182648bec346e270cb1ada8727613377ab95b0ccb595c516de242f486110c88b7009e98c87b071bf5b598f84466e5624aa1d81f19e195"
+        },
+        {
+          "filename": "wayland-protocols_1.45.orig.tar.xz.asc",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland-protocols/wayland-protocols_1.45.orig.tar.xz.asc",
+          "hash": "sha512:f9def0cf42630adc5abe0418e8e2424e2c495d4e897cd413312af48c9f3d492ba03ec65f61547f9a8b4f0faf8315f04269f973abb05f11417a8e642c15b494ba"
+        },
+        {
+          "filename": "wayland-protocols_1.45-1~ubuntu0.24.04.2.debian.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland-protocols/wayland-protocols_1.45-1%7eubuntu0.24.04.2.debian.tar.xz",
+          "hash": "sha512:b3738287ee670de4514b8b501a44119f430b4fc1a79b3d194915fb2cbb03d4b897bbc15364649c078f61802b67d6f6602aa4e945814b0368155ebe2283ffd0e6"
+        },
+        {
+          "filename": "wayland-protocols_1.45-1~ubuntu0.24.04.2.dsc",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland-protocols/wayland-protocols_1.45-1%7eubuntu0.24.04.2.dsc",
+          "hash": "sha512:60470f994e3068e26105d084ad1c2e68d7e12cadc54c20f807f5e44d492c9212f49e446fc02d9a24f3c8e4c9210e9ba7a2ea0ccc80c817934a454ad3cd97e088"
+        }
+      ]
+    },
+    {
+      "name": "gtk4",
+      "version": "4.14.5+ds-0ubuntu0.10",
+      "files": [
+        {
+          "filename": "gtk4_4.14.5+ds.orig.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gtk4/gtk4_4.14.5%2bds.orig.tar.xz",
+          "hash": "sha256:bd52b294cd18784339b105e2f25d2569e3db94411c64b9b141b23fe39118a0e5"
+        },
+        {
+          "filename": "gtk4_4.14.5+ds-0ubuntu0.10.debian.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gtk4/gtk4_4.14.5%2bds-0ubuntu0.10.debian.tar.xz",
+          "hash": "sha256:17692a86b96fa9bc930f744694c02a43f7a048abdfb1f9864fe2b9925f649d00"
+        },
+        {
+          "filename": "gtk4_4.14.5+ds-0ubuntu0.10.dsc",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gtk4/gtk4_4.14.5%2bds-0ubuntu0.10.dsc",
+          "hash": "sha256:04ace1e47b9d3a94c876f34c10b0e7d8507dc58e5517e8951f30932afcb12126"
+        }
+      ]
+    },
+    {
+      "name": "vte2.91",
+      "version": "0.76.0-1ubuntu0.1",
+      "files": [
+        {
+          "filename": "vte2.91_0.76.0.orig.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/v/vte2.91/vte2.91_0.76.0.orig.tar.xz",
+          "hash": "sha512:4eccdac2eeb33ae76c67000081b3ae26b0872ac3c1b89517db87a1574dc1121992ad708a0ffced34e30a0fd351166552215cf897d722b53d2313d5b8deed2385"
+        },
+        {
+          "filename": "vte2.91_0.76.0-1ubuntu0.1.debian.tar.xz",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/v/vte2.91/vte2.91_0.76.0-1ubuntu0.1.debian.tar.xz",
+          "hash": "sha512:201f56cc22146731cadff39024bef7aae890fe11b183694c677c7ca626cbc622ab04e004974a3fee99f4711bd0a275fea3781e1b487fe9c4e26801a0656e27df"
+        },
+        {
+          "filename": "vte2.91_0.76.0-1ubuntu0.1.dsc",
+          "url": "https://archive.ubuntu.com/ubuntu/pool/main/v/vte2.91/vte2.91_0.76.0-1ubuntu0.1.dsc",
+          "hash": "sha512:771e04a292ab09710dd1523ba4875ad6d8eac40a7aef620ffc7e9a19e763306bcb52f68f7e46d39d5a470c5b796f329f63671c604169daec7bd070116ad0d8b8"
+        }
+      ]
+    }
+  ]
+}

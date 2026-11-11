@@ -32,6 +32,10 @@ def profile(kind=1):
 
 class Connection:
     def __init__(self, settings, password=PASSWORD, env=None):
+        # CI/container builds have no parent terminal. The SSH fixture's line
+        # editor needs the same terminal type that VTE supplies in the app.
+        env = dict(os.environ if env is None else env)
+        env['TERM'] = env.get('TERM') or 'xterm-256color'
         config = json.dumps(settings).encode(); secret = password.encode() if password else b''
         fd = os.memfd_create('devterm-test', os.MFD_CLOEXEC)
         os.write(fd, struct.pack('>II', len(config), len(secret)) + config + secret); os.lseek(fd, 0, 0)

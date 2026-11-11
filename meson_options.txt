@@ -1,0 +1,2 @@
+option('bundled_runtime', type: 'boolean', value: false,
+       description: 'Initialize private GTK schemas for the Ubuntu 22.04 package')

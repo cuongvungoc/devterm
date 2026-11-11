@@ -5,6 +5,8 @@
 #include "draft.h"
 #include "confirm-dialog.h"
 #include "ui-style.h"
+#include "devterm-version.h"
+#include "runtime.h"
 #include <gtk/gtk.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -721,6 +723,7 @@ static void activate(GtkApplication *application, gpointer data) {
     App *app = g_new0(App, 1);
     app->tabs = g_ptr_array_new_with_free_func(tab_free);
     app->window = gtk_application_window_new(application);
+    gtk_window_set_icon_name(GTK_WINDOW(app->window), "com.example.DevTerm");
     g_object_set_data_full(G_OBJECT(app->window), "app", app, app_free);
     g_signal_connect(app->window, "destroy", G_CALLBACK(on_window_destroy), app);
     g_signal_connect(app->window, "close-request", G_CALLBACK(on_window_close_request), app);
@@ -869,9 +872,16 @@ static void activate(GtkApplication *application, gpointer data) {
     schedule_focus(app);
 }
 int main(int argc, char **argv) {
+    if (argc == 2 && g_str_equal(argv[1], "--version")) {
+        g_print("DevTerm %s\n", DEVTERM_VERSION);
+        return 0;
+    }
     /* Password entry buffers must not end up in core dumps. Exec resets this
      * flag, so local shells keep their usual debugging/core-dump behavior. */
     prctl(PR_SET_DUMPABLE, 0);
+#if DEVTERM_BUNDLED_RUNTIME
+    if (!runtime_init_schemas()) return 1;
+#endif
     GtkApplication *app = gtk_application_new("com.example.DevTerm", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     int result = g_application_run(G_APPLICATION(app), argc, argv);

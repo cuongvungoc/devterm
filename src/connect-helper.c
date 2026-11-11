@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 #include "sessions.h"
+#include "devterm-version.h"
+#include "runtime.h"
 #include "login.h"
 #include <gtk/gtk.h>
 #include <errno.h>
@@ -134,8 +136,15 @@ static GPtrArray *client_args(SessionProfile *p, GError **error) {
     g_free(port); g_ptr_array_add(a, NULL); return a;
 }
 int main(int argc, char **argv) {
+    if (argc == 2 && g_str_equal(argv[1], "--version")) {
+        g_print("DevTerm Connect %s\n", DEVTERM_VERSION);
+        return 0;
+    }
     struct rlimit limit = {0, 0}; setrlimit(RLIMIT_CORE, &limit); prctl(PR_SET_DUMPABLE, 0);
     pid_t parent = getppid(); prctl(PR_SET_PDEATHSIG, SIGHUP); if (getppid() != parent) return 1;
+#if DEVTERM_BUNDLED_RUNTIME
+    if (!runtime_init_schemas()) return 1;
+#endif
     if (argc == 2 && strcmp(argv[1], "--session")) return askpass(argv[1]);
     if (argc != 2) return 1;
     GError *error = NULL; char *secret = NULL;

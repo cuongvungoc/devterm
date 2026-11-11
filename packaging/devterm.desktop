@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=DevTerm
+GenericName=Terminal Emulator
+Comment=Terminal workspace with split panes, sessions and Quick Commands
+Exec=devterm
+Icon=com.example.DevTerm
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;ssh;telnet;serial;
+StartupNotify=true
+StartupWMClass=devterm

@@ -1,5 +1,12 @@
 project('devterm', 'c', version: '0.1.0', default_options: ['c_std=c11', 'warning_level=2'])
 
+version_config = configuration_data()
+version_config.set_quoted('DEVTERM_VERSION', meson.project_version())
+version_config.set10('DEVTERM_BUNDLED_RUNTIME', get_option('bundled_runtime'))
+configure_file(output: 'devterm-version.h', configuration: version_config)
+install_data('packaging/devterm.desktop', rename: 'com.example.DevTerm.desktop', install_dir: get_option('datadir') / 'applications')
+install_data('data/com.example.DevTerm.svg', install_dir: get_option('datadir') / 'icons/hicolor/scalable/apps')
+
 gtk = dependency('gtk4', version: '>=4.10')
 vte = dependency('vte-2.91-gtk4', version: '>=0.70')
 json = dependency('json-glib-1.0', version: '>=1.6')
@@ -12,8 +19,12 @@ src = files('src/commands.c')
 gnome = import('gnome')
 ui_resources = gnome.compile_resources('devterm-resources', 'data/devterm.gresource.xml', source_dir: 'data', c_name: 'devterm_resources')
 terminal_src = files('src/pane.c', 'src/split-layout.c', 'src/sessions.c')
-executable('devterm', ['src/main.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
-executable('devterm-connect', ['src/connect-helper.c', 'src/sessions.c', 'src/login.c'], dependencies: [gtk, json, gio, util], install: true)
+runtime_src = []
+if get_option('bundled_runtime')
+    runtime_src = files('src/runtime.c')
+endif
+executable('devterm', ['src/main.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
+executable('devterm-connect', ['src/connect-helper.c', 'src/sessions.c', 'src/login.c', runtime_src], dependencies: [gtk, json, gio, util], install: true)
 test_exe = executable('test-commands', ['tests/test-commands.c', src], dependencies: [json, gio])
 test('commands', test_exe)
 layout_test = executable('test-layout', ['tests/test-layout.c', terminal_src], dependencies: [gtk, vte, gio, pcre, json])
