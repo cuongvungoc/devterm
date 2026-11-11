@@ -1,4 +1,4 @@
-# Kiểm thử gói Ubuntu
+# Kiểm thử gói Ubuntu và Linux Mint
 
 Ngày thực hiện: 06/11/2026. Máy build Ubuntu 24.04 amd64; executable ARM64 chạy bằng QEMU/binfmt. Container kiểm tra bản cài không chứa compiler hay SDK GTK của builder. GUI chạy bằng tài khoản thường trên X11/Xvfb.
 
@@ -29,3 +29,16 @@ Kết quả máy đọc được nằm trong `dist/*.install.json`, kèm checksu
 - Bài nâng cấp dùng cùng payload với revision cao hơn để kiểm tra vòng đời dpkg và giữ cấu hình; chưa có bản phát hành DevTerm cũ độc lập để kiểm tra migration giữa các phiên bản.
 
 Trên máy đích: cài đúng gói bằng APT; mở từ menu, thử resize/split/scrollbar, Quick Commands, Search, Draft và lưu Export; thử SSH password/host-key/keyring, Telnet và Serial với thiết bị của mình; kiểm tra theme/font và clipboard với desktop đang dùng. Lưu công việc/nháp trước khi đóng ứng dụng để nâng cấp.
+
+## Linux Mint 22.1 Xia amd64 — 11/11/2026
+
+Artifact: `devterm_0.1.0-1~linuxmint22.1_amd64.deb`. Binary và các file ứng dụng được giữ nguyên từ gói Noble amd64 đã qua 46 test ở trên; chỉ thay control/version/preinst và thêm tài liệu Mint. Đây là kết quả test binary kế thừa, không phải chạy lại 46 test trên Mint.
+
+Đã kiểm tra độc lập gói Mint trong container tối giản nền Noble có kho Xia được APT xác thực, dùng gói `base-files` chính thức `13ubuntu10mint22.1.0+xia`. `/etc/os-release` do gói này cung cấp trả về `ID=linuxmint`, `VERSION_ID=22.1`, `VERSION_CODENAME=xia`, `UBUNTU_CODENAME=noble`, khớp máy được cung cấp; không dùng file nhận diện giả để vượt điều kiện cài đặt.
+
+- Đạt: APT cài mới, ELF không thiếu thư viện, checksum file đã cài, app/helper `--version`.
+- Đạt: launcher đã cài, lệnh trong PTY, split phải/xuống, tab mới, Draft không thực thi, mở/hủy Export và helper gọi client thử nghiệm, không truyền runtime riêng vào chương trình con; app thoát bình thường.
+- Đạt: từ chối sai version, sai distro, sai Ubuntu base và thiếu Ubuntu base. Các bài từ chối tạm thay OS marker trong container, rồi khôi phục trước khi tiếp tục.
+- Đạt: nâng revision thử nghiệm, gỡ/cài lại và bảo toàn cấu hình người dùng.
+
+Provenance và kết quả nằm trong `dist/devterm_0.1.0-1~linuxmint22.1_amd64.build.json` và `.install.json`. Chưa kiểm tra trực tiếp desktop, keyring và phần cứng của máy Mint người dùng; các giới hạn Wayland/Serial ở trên vẫn áp dụng. Xem [hướng dẫn Mint](MINT.md) để cài và tạo lại gói.

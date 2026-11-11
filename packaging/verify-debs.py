@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install each .deb in a clean, matching Ubuntu container and test its lifecycle."""
+"""Install each .deb in a matching Ubuntu/Mint APT environment and test its lifecycle."""
 import argparse
 import os
 from pathlib import Path
@@ -22,13 +22,19 @@ def main():
     for path in args.packages:
         path = path.resolve()
         match = re.fullmatch(r'devterm_.+~ubuntu(22\.04|24\.04)_(amd64|arm64)\.deb', path.name)
-        if not match:
-            parser.error('Expected a DevTerm Ubuntu package name: ' + str(path))
-        ubuntu, arch = match.groups()
-        image = f'devterm-verify:{ubuntu}-{arch}'
+        mint = re.fullmatch(r'devterm_.+~linuxmint22\.1_amd64\.deb', path.name)
+        if match:
+            ubuntu, arch = match.groups()
+            image = f'devterm-verify:{ubuntu}-{arch}'
+        elif mint:
+            ubuntu, arch = '24.04', 'amd64'
+            image = 'devterm-verify:linuxmint22.1-amd64'
+        else:
+            parser.error('Expected a DevTerm Ubuntu or Mint 22.1 amd64 package name: ' + str(path))
         try:
             with target_base(ubuntu, arch) as base:
                 run(['docker', 'build', '--platform', 'linux/' + arch, '--build-arg', 'BASE_IMAGE=' + base,
+                     '--build-arg', 'LINUXMINT=' + ('22.1' if mint else ''),
                      '-t', image, '-f', ROOT / 'packaging/Dockerfile.verify', ROOT / 'packaging'])
             run(['docker', 'run', '--rm', '--platform', 'linux/' + arch,
                  '--mount', f'type=bind,source={ROOT},target=/source,readonly',

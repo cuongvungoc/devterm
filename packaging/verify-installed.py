@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     artifact = args.package.resolve()
+    platform_file = Path('/usr/local/share/devterm-test-platform.json')
+    platform = json.loads(platform_file.read_text()) if platform_file.exists() else None
     version = capture(['dpkg-deb', '-f', artifact, 'Version'])
     arch = capture(['dpkg-deb', '-f', artifact, 'Architecture'])
     if capture(['dpkg', '--print-architecture']) != arch:
@@ -68,11 +70,22 @@ def main():
     # container's OS marker and restoring it immediately afterwards.
     os_release = Path('/etc/os-release')
     original_release = os_release.read_text()
+    invalid_markers = {'wrong_version': dict(VERSION_ID='0.00')}
+    if platform:
+        invalid_markers.update(wrong_distro=dict(ID='ubuntu'),
+                               wrong_ubuntu_base=dict(UBUNTU_CODENAME='jammy'),
+                               missing_ubuntu_base=dict(UBUNTU_CODENAME=None))
+    guard_rejections = {}
     try:
-        os_release.write_text(re.sub(r'^VERSION_ID=.*$', 'VERSION_ID="0.00"', original_release, flags=re.M))
-        rejected = subprocess.run(['dpkg', '--unpack', str(artifact)]).returncode != 0
-        if not rejected:
-            raise RuntimeError('Package accepted an unsupported OS marker')
+        for label, overrides in invalid_markers.items():
+            changed_release = original_release
+            for key, value in overrides.items():
+                replacement = f'{key}="{value}"' if value is not None else ''
+                changed_release = re.sub(r'^' + key + r'=.*$', replacement, changed_release, flags=re.M)
+            os_release.write_text(changed_release)
+            guard_rejections[label] = subprocess.run(['dpkg', '--unpack', str(artifact)]).returncode != 0
+            if not guard_rejections[label]:
+                raise RuntimeError('Package accepted an unsupported OS marker: ' + label)
     finally:
         os_release.write_text(original_release)
     assert capture(['dpkg-query', '-W', '-f=${Version}', 'devterm']) == version
@@ -93,7 +106,8 @@ def main():
     assert config.read_text() == sentinel
     report = dict(version=version, architecture=arch,
         sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(), clean_apt_install=True,
-        dependency_maps=dependency_maps, gui=gui, wrong_os_marker_rejected=rejected,
+        dependency_maps=dependency_maps, gui=gui, wrong_os_marker_rejected=all(guard_rejections.values()),
+        os_guard_rejections=guard_rejections, platform=platform,
         upgrade_preserved_config=True, remove_preserved_config=True, reinstall=True,
         hardware_serial=False, physical_arm=False, wayland=False)
     args.report.write_text(json.dumps(report, indent=2) + '\n')

@@ -14,6 +14,8 @@ devterm --version
 
 App có mục DevTerm trong menu ứng dụng. Bản 22.04 đóng kèm runtime riêng; bản 24.04 dùng GTK/VTE của Ubuntu. Các gói, checksum và báo cáo build/test nằm trong `dist/`. Xem [hướng dẫn đóng gói, cài đặt và kiểm thử](packaging/README.md) để chọn gói, nâng cấp/gỡ và tạo lại cả bốn bản bằng Docker; [báo cáo kiểm thử](packaging/TESTING.md) ghi kết quả và giới hạn. Cài gói không cần compiler, Meson hoặc source trên máy đích.
 
+Linux Mint **22.1 Xia amd64** có gói riêng `devterm_0.1.0-1~linuxmint22.1_amd64.deb`, dùng binary Noble đã kiểm thử và điều kiện cài đặt phù hợp với Mint. Xem [hướng dẫn Linux Mint](packaging/MINT.md).
+
 ## Cài đặt và chạy
 
 Trên Ubuntu 24.04:

@@ -5,3 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 xvfb xauth xdotool dbus-x11 ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1001 devterm-test
+ARG LINUXMINT=""
+COPY setup-mint-test.py /tmp/devterm-setup-mint-test.py
+RUN if [ "$LINUXMINT" = 22.1 ]; then \
+        python3 /tmp/devterm-setup-mint-test.py && rm -rf /var/lib/apt/lists/*; \
+    elif [ -n "$LINUXMINT" ]; then exit 1; fi \
+    && rm /tmp/devterm-setup-mint-test.py

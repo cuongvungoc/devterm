@@ -1,17 +1,20 @@
-# Gói cài DevTerm cho Ubuntu
+# Gói cài DevTerm cho Ubuntu và Linux Mint
 
 Hỗ trợ Ubuntu **22.04 / 24.04**, mỗi bản có gói **amd64 / arm64** riêng. Cần desktop X11 hoặc Wayland và Internet để APT tải dependency. Bốn gói là những bản build riêng, không phải đổi nhãn kiến trúc của cùng một binary.
+
+Có thêm biến thể **Linux Mint 22.1 Xia amd64** dùng lại payload của bản Noble đã kiểm thử, với version và điều kiện cài đặt riêng. Xem [cách cài và tạo lại gói Mint](MINT.md).
 
 ## Cài đặt
 
 Kiểm tra `VERSION_ID` trong `/etc/os-release` và `dpkg --print-architecture`, rồi chọn đúng file trong `dist/`:
 
-| Ubuntu | CPU | File phiên bản 0.1.0, revision 1 |
+| Hệ điều hành | CPU | File phiên bản 0.1.0, revision 1 |
 | --- | --- | --- |
 | 22.04 | Intel/AMD 64 bit (`amd64`) | `devterm_0.1.0-1~ubuntu22.04_amd64.deb` |
 | 22.04 | ARM 64 bit (`arm64`) | `devterm_0.1.0-1~ubuntu22.04_arm64.deb` |
 | 24.04 | Intel/AMD 64 bit (`amd64`) | `devterm_0.1.0-1~ubuntu24.04_amd64.deb` |
 | 24.04 | ARM 64 bit (`arm64`) | `devterm_0.1.0-1~ubuntu24.04_arm64.deb` |
+| Linux Mint 22.1 Xia | Intel/AMD 64 bit (`amd64`) | `devterm_0.1.0-1~linuxmint22.1_amd64.deb` |
 
 ```sh
 # Ví dụ Ubuntu 24.04, CPU Intel/AMD 64 bit
@@ -20,7 +23,7 @@ devterm
 devterm --version
 ```
 
-Có thể mở DevTerm từ menu ứng dụng. CPU ARM64 chọn file có hậu tố `_arm64.deb`. Gói sẽ từ chối cài trên bản Ubuntu không khớp. Chỉ kiểm thử các bản Ubuntu nêu trên, không mặc định hỗ trợ distro dẫn xuất.
+Có thể mở DevTerm từ menu ứng dụng. CPU ARM64 chọn file có hậu tố `_arm64.deb`. Gói Ubuntu sẽ từ chối cài trên bản Ubuntu không khớp. Gói Mint chỉ chấp nhận `linuxmint`, version `22.1`, base `noble`; chưa mở rộng sang Mint khác hoặc LMDE.
 
 `apt install` một file `.deb` có phiên bản mới để nâng cấp; `sudo apt remove devterm` để gỡ. Các script cài/gỡ không sửa hoặc xóa `~/.config/devterm/`. Password thuộc Secret Service của người dùng, không nằm trong gói hay JSON. Đăng nhập desktop và mở khóa keyring để ghi nhớ password; thiếu dịch vụ vẫn dùng password một lần. Serial cần quyền thiết bị của tài khoản, thường là nhóm `dialout`; ứng dụng không chạy bằng root.
 
