@@ -7,6 +7,7 @@ typedef void (*DraftVisibilityChanged)(gboolean visible, gpointer data);
 /* The page wraps terminal_area in a vertical split; text stays in RAM only. */
 Draft *draft_new(GtkWidget *terminal_area, const char *title, DraftVisibilityChanged changed, gpointer data);
 void draft_free(Draft *draft);
+void draft_set_title(Draft *draft, const char *title);
 GtkWidget *draft_widget(Draft *draft);
 gboolean draft_is_visible(Draft *draft);
 void draft_set_visible(Draft *draft, gboolean visible);

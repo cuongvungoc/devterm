@@ -3,6 +3,7 @@
 #include "text-export.h"
 #include "sessions-ui.h"
 #include "draft.h"
+#include "tab-strip.h"
 #include "confirm-dialog.h"
 #include "ui-style.h"
 #include "devterm-version.h"
@@ -33,6 +34,7 @@ struct App {
     TerminalTab *active_tab;
     guint next_tab_id, focus_idle;
     gboolean shutting_down;
+    TabStrip *tab_strip;
     QuickCommandsUI *quick_commands;
     SessionManager *sessions;
 };
@@ -68,7 +70,7 @@ static void status(App *app, const char *message) {
 static gboolean focus_current(gpointer data) {
     App *app = data;
     app->focus_idle = 0;
-    if (!app->shutting_down && app->active_tab) {
+    if (!app->shutting_down && !tab_strip_busy(app->tab_strip) && app->active_tab) {
         TerminalTab *tab = app->active_tab;
         gboolean editor = draft_wants_focus(tab->draft);
         draft_track_focus(tab->draft, FALSE);
@@ -90,6 +92,7 @@ static void on_tab_status(SplitLayout *layout, const char *message, gpointer dat
     if (!tab->app->shutting_down && tab->app->active_tab == tab) status(tab->app, message);
 }
 static void tab_dispose(TerminalTab *tab) {
+    tab_strip_remove(tab->app->tab_strip, tab->id);
     GtkWidget *dialog = g_steal_pointer(&tab->close_dialog);
     if (dialog) gtk_window_destroy(GTK_WINDOW(dialog));
     g_clear_pointer(&tab->draft, draft_free);
@@ -134,6 +137,8 @@ static void sync_current_tab(App *app) {
 }
 static void close_tab_now(TerminalTab *tab) {
     App *app = tab->app;
+    /* Cancelling an in-progress drag may restore a different page order. */
+    tab_strip_remove(app->tab_strip, tab->id);
     int page = gtk_notebook_page_num(GTK_NOTEBOOK(app->notebook), tab->page);
     if (page < 0) return;
     if (app->active_tab == tab) app->active_tab = NULL;
@@ -184,9 +189,24 @@ static void request_close_tab(TerminalTab *tab) {
         "Close Tab", on_close_response, request, close_request_free);
     g_free(title); g_string_free(detail, TRUE);
 }
-static void on_tab_close(GtkButton *button, gpointer data) {
-    (void)button;
-    request_close_tab(data);
+static void on_tab_action(guint id, TabStripAction action, const char *title, gpointer data) {
+    App *app = data;
+    if (app->shutting_down) return;
+    TerminalTab *tab = find_tab(app, id);
+    if (action == TAB_STRIP_RENAMED && tab) {
+        g_free(tab->title); tab->title = g_strdup(title);
+        draft_set_title(tab->draft, title);
+    } else if (action == TAB_STRIP_CLOSE && tab) request_close_tab(tab);
+    else if (action == TAB_STRIP_FOCUS) schedule_focus(app);
+}
+static void on_page_reordered(GtkNotebook *notebook, GtkWidget *page, guint number, gpointer data) {
+    (void)page; (void)number; App *app = data;
+    if (app->shutting_down || gtk_notebook_get_n_pages(notebook) != (int)app->tabs->len) return;
+    /* Update pointers in place: removing from the array would free live tabs. */
+    for (guint i = 0; i < app->tabs->len; i++) {
+        GtkWidget *child = gtk_notebook_get_nth_page(notebook, i);
+        app->tabs->pdata[i] = g_object_get_data(G_OBJECT(child), "terminal-tab");
+    }
 }
 static void on_draft_visibility(gboolean visible, gpointer data) {
     TerminalTab *tab = data; App *app = tab->app;
@@ -212,22 +232,8 @@ static void open_tab(App *app, const char *directory, const SessionProfile *prof
     gtk_widget_add_css_class(tab->page, "tab-page");
     g_object_set_data(G_OBJECT(tab->page), "terminal-tab", tab);
     g_ptr_array_add(app->tabs, tab);
-    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_box_append(GTK_BOX(header), ui_icon(profile ? "network-server-symbolic" : "utilities-terminal-symbolic"));
-    GtkWidget *tab_label = gtk_label_new(tab->title);
-    gtk_label_set_ellipsize(GTK_LABEL(tab_label), PANGO_ELLIPSIZE_END); gtk_label_set_max_width_chars(GTK_LABEL(tab_label), 22);
-    gtk_label_set_width_chars(GTK_LABEL(tab_label), 12);
-    gtk_widget_set_tooltip_text(tab_label, tab->title);
-    gtk_box_append(GTK_BOX(header), tab_label);
-    GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
-    gtk_widget_set_focus_on_click(close, FALSE);
-    gtk_widget_add_css_class(close, "flat");
-    gtk_widget_add_css_class(close, "tab-close");
-    gtk_widget_set_tooltip_text(close, "Close tab");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(close), GTK_ACCESSIBLE_PROPERTY_LABEL, "Close tab", -1);
-    g_signal_connect(close, "clicked", G_CALLBACK(on_tab_close), tab);
-    gtk_box_append(GTK_BOX(header), close);
-    int page = gtk_notebook_append_page(GTK_NOTEBOOK(app->notebook), tab->page, header);
+    int page = tab_strip_append(app->tab_strip, tab->id, tab->page, tab->title,
+        profile ? "network-server-symbolic" : "utilities-terminal-symbolic");
     gtk_widget_set_visible(app->notebook, TRUE);
     gtk_stack_set_visible_child_name(GTK_STACK(app->workspace), "tabs");
     gtk_notebook_set_current_page(GTK_NOTEBOOK(app->notebook), page);
@@ -460,6 +466,7 @@ static void on_window_destroy(GtkWidget *window, gpointer data) {
     App *app = data;
     if (app->shutting_down) return;
     app->shutting_down = TRUE;
+    g_clear_pointer(&app->tab_strip, tab_strip_free);
     g_clear_pointer(&app->quick_commands, quick_commands_ui_free);
     GtkWidget *dialog = g_steal_pointer(&app->window_close_dialog);
     if (dialog) gtk_window_destroy(GTK_WINDOW(dialog));
@@ -514,6 +521,7 @@ static gboolean on_window_close_request(GtkWindow *window, gpointer data) {
 static void app_free(gpointer data) {
     App *app = data;
     if (app->focus_idle) g_source_remove(app->focus_idle);
+    g_clear_pointer(&app->tab_strip, tab_strip_free);
     g_ptr_array_unref(app->tabs);
     g_clear_pointer(&app->quick_commands, quick_commands_ui_free);
     g_clear_object(&app->notebook);
@@ -617,6 +625,8 @@ static void activate(GtkApplication *application, gpointer data) {
      * Keep the notebook valid until tab callbacks have been disconnected. */
     g_object_ref_sink(app->notebook);
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(app->notebook), TRUE);
+    app->tab_strip = tab_strip_new(GTK_WINDOW(app->window), GTK_NOTEBOOK(app->notebook), on_tab_action, app);
+    g_signal_connect(app->notebook, "page-reordered", G_CALLBACK(on_page_reordered), app);
     gtk_stack_add_named(GTK_STACK(app->workspace), app->notebook, "tabs");
     g_signal_connect(app->notebook, "switch-page", G_CALLBACK(on_switch_page), app);
     GtkWidget *empty = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);

@@ -1,4 +1,4 @@
-project('devterm', 'c', version: '0.1.0', default_options: ['c_std=c11', 'warning_level=2'])
+project('devterm', 'c', version: '0.3.0', default_options: ['c_std=c11', 'warning_level=2'])
 
 version_config = configuration_data()
 version_config.set_quoted('DEVTERM_VERSION', meson.project_version())
@@ -23,7 +23,8 @@ runtime_src = []
 if get_option('bundled_runtime')
     runtime_src = files('src/runtime.c')
 endif
-executable('devterm', ['src/main.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
+app_src = ['src/tab-strip.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src]
+executable('devterm', ['src/main.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
 executable('devterm-connect', ['src/connect-helper.c', 'src/sessions.c', 'src/login.c', runtime_src], dependencies: [gtk, json, gio, util], install: true)
 test_exe = executable('test-commands', ['tests/test-commands.c', src], dependencies: [json, gio])
 test('commands', test_exe)
@@ -47,3 +48,5 @@ reconnect_test = executable('test-reconnect', ['tests/test-reconnect.c', termina
 test('reconnect', find_program('dbus-run-session'), args: ['--', reconnect_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals'], is_parallel: false, timeout: 90)
 quick_ui_test = executable('test-quick-ui', ['tests/test-quick-ui.c', 'src/quick-commands-ui.c', 'src/confirm-dialog.c', src], dependencies: [gtk, json, gio])
 test('quick-ui', quick_ui_test, env: ['G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)
+tabs_test = executable('test-tabs', ['tests/test-tabs.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret])
+test('tabs', find_program('dbus-run-session'), args: ['--', tabs_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)

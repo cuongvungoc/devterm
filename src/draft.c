@@ -3,7 +3,7 @@
 
 struct Draft {
     int refs;
-    GtkWidget *page, *panel, *view, *copy, *clear, *hide;
+    GtkWidget *page, *panel, *view, *copy, *clear, *hide, *title_label;
     GtkTextBuffer *buffer;
     GtkEventController *editor_focus, *terminal_focus;
     GtkWidget *clear_dialog;
@@ -24,6 +24,12 @@ GtkWidget *draft_widget(Draft *d) { return d->page; }
 gboolean draft_is_visible(Draft *d) { return d && !d->closed && gtk_widget_get_visible(d->panel); }
 gboolean draft_has_text(Draft *d) { return d && !d->closed && gtk_text_buffer_get_char_count(d->buffer) > 0; }
 gboolean draft_wants_focus(Draft *d) { return draft_is_visible(d) && d->editor_selected; }
+void draft_set_title(Draft *d, const char *title) {
+    if (!d || d->closed) return;
+    char *caption = g_strdup_printf("Draft — %s", title);
+    gtk_label_set_text(GTK_LABEL(d->title_label), caption);
+    gtk_widget_set_tooltip_text(d->title_label, caption); g_free(caption);
+}
 void draft_focus(Draft *d) {
     if (draft_is_visible(d)) {
         d->editor_selected = TRUE;
@@ -123,10 +129,9 @@ Draft *draft_new(GtkWidget *terminal_area, const char *title, DraftVisibilityCha
     GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(header, "draft-header");
     gtk_widget_set_margin_start(header, 8); gtk_widget_set_margin_end(header, 8); gtk_widget_set_margin_top(header, 4);
-    char *caption = g_strdup_printf("Draft — %s", title);
-    GtkWidget *label = gtk_label_new(caption); g_free(caption);
+    GtkWidget *label = d->title_label = gtk_label_new(NULL);
+    draft_set_title(d, title);
     gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END); gtk_label_set_xalign(GTK_LABEL(label), 0);
-    gtk_widget_set_tooltip_text(label, "Scratch space for this tab. Copy text to use it elsewhere.");
     gtk_widget_add_css_class(label, "section-title");
     gtk_widget_set_hexpand(label, TRUE); gtk_box_append(GTK_BOX(header), label);
     d->copy = gtk_button_new_with_label("Copy"); gtk_widget_set_tooltip_text(d->copy, "Copy selected text, or the entire draft when nothing is selected");
