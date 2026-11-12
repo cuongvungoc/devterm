@@ -82,14 +82,22 @@ static void change_secret(SessionManager *m, const SessionProfile *p, const char
     if (password) credential_store(p, password, m->cancel, secret_changed, c);
     else credential_clear(p, m->cancel, secret_changed, c);
 }
-typedef struct { SessionManager *manager; SessionProfile *profile; GtkWidget *password, *remember; } Connection;
+typedef struct {
+    SessionManager *manager; SessionProfile *profile; GtkWidget *password, *remember;
+    GCancellable *cancel; gulong manager_cancel;
+    SessionConnect connect; gpointer data; GDestroyNotify destroy;
+} Connection;
 static void connection_free(gpointer data) {
-    Connection *c = data; session_profile_free(c->profile); manager_unref(c->manager); g_free(c);
+    Connection *c = data;
+    g_signal_handler_disconnect(c->manager->cancel, c->manager_cancel);
+    if (c->destroy) c->destroy(c->data);
+    g_object_unref(c->cancel);
+    session_profile_free(c->profile); manager_unref(c->manager); g_free(c);
 }
 static void launch(Connection *c, const char *password) {
     SessionManager *m = c->manager;
-    if (!m->closing && m->connect) {
-        m->connect(c->profile, password, m->data);
+    if (!m->closing && !g_cancellable_is_cancelled(c->cancel) && c->connect) {
+        c->connect(c->profile, password, c->data);
         if (m->window) gtk_window_destroy(GTK_WINDOW(m->window));
     }
 }
@@ -100,7 +108,7 @@ static gboolean password_valid(const char *password) {
 }
 static void password_response(GtkDialog *dialog, int response, gpointer data) {
     Connection *c = data; SessionManager *m = c->manager;
-    if (response == GTK_RESPONSE_ACCEPT && !m->closing) {
+    if (response == GTK_RESPONSE_ACCEPT && !m->closing && !g_cancellable_is_cancelled(c->cancel)) {
         const char *password = gtk_editable_get_text(GTK_EDITABLE(c->password));
         if (!password_valid(password)) { gtk_widget_set_tooltip_text(c->password, "Enter 1–1023 UTF-8 bytes without control characters"); gtk_widget_add_css_class(c->password, "error"); return; }
         gboolean remember = gtk_check_button_get_active(GTK_CHECK_BUTTON(c->remember));
@@ -121,9 +129,12 @@ static void password_response(GtkDialog *dialog, int response, gpointer data) {
     }
     gtk_window_destroy(GTK_WINDOW(dialog));
 }
+static void cancel_password(GCancellable *cancel, GtkWindow *dialog) {
+    (void)cancel; gtk_window_destroy(dialog);
+}
 static void password_dialog(Connection *c, const char *detail) {
     SessionManager *m = c->manager;
-    if (m->closing) { connection_free(c); return; }
+    if (m->closing || g_cancellable_is_cancelled(c->cancel)) { connection_free(c); return; }
     GtkWindow *parent = g_weak_ref_get(&m->parent);
     if (!parent) { connection_free(c); return; }
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Session Password", parent, GTK_DIALOG_MODAL,
@@ -131,6 +142,7 @@ static void password_dialog(Connection *c, const char *detail) {
     gtk_widget_add_css_class(dialog, "devterm-dialog");
     g_object_unref(parent); gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
     g_object_set_data_full(G_OBJECT(dialog), "connection", c, connection_free);
+    g_signal_connect_object(c->cancel, "cancelled", G_CALLBACK(cancel_password), dialog, 0);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dialog)); gtk_box_set_spacing(GTK_BOX(box), 8);
     gtk_widget_set_margin_start(box, 16); gtk_widget_set_margin_end(box, 16); gtk_widget_set_margin_top(box, 16); gtk_widget_set_margin_bottom(box, 16);
     char *text = g_strdup_printf("%s\n%s", c->profile->name, detail);
@@ -153,7 +165,7 @@ static void password_dialog(Connection *c, const char *detail) {
 static void password_found(GObject *source, GAsyncResult *result, gpointer data) {
     (void)source; Connection *c = data; GError *error = NULL;
     char *password = credential_lookup_finish(result, &error);
-    if (c->manager->closing) { session_secret_free(password); g_clear_error(&error); connection_free(c); return; }
+    if (c->manager->closing || g_cancellable_is_cancelled(c->cancel)) { session_secret_free(password); g_clear_error(&error); connection_free(c); return; }
     if (password && password_valid(password)) { launch(c, password); session_secret_free(password); connection_free(c); }
     else {
         session_secret_free(password);
@@ -163,12 +175,19 @@ static void password_found(GObject *source, GAsyncResult *result, gpointer data)
     }
     g_clear_error(&error);
 }
-void session_manager_connect(SessionManager *m, const SessionProfile *p) {
-    if (m->closing) return;
+void session_manager_connect_to(SessionManager *m, const SessionProfile *p, GCancellable *cancel,
+    SessionConnect callback, gpointer data, GDestroyNotify destroy) {
+    if (m->closing || (cancel && g_cancellable_is_cancelled(cancel))) { if (destroy) destroy(data); return; }
     Connection *c = g_new0(Connection, 1); c->manager = manager_ref(m); c->profile = session_profile_copy(p);
+    c->connect = callback; c->data = data; c->destroy = destroy;
+    c->cancel = cancel ? g_object_ref(cancel) : g_cancellable_new();
+    c->manager_cancel = g_signal_connect_swapped(m->cancel, "cancelled", G_CALLBACK(g_cancellable_cancel), c->cancel);
     if (!session_needs_password(p)) { launch(c, NULL); connection_free(c); }
-    else if (p->remember) { notify(m, "Retrieving password from system keyring…"); credential_lookup(p, m->cancel, password_found, c); }
+    else if (p->remember) { notify(m, "Retrieving password from system keyring…"); credential_lookup(p, c->cancel, password_found, c); }
     else password_dialog(c, "Enter the password for this connection.");
+}
+void session_manager_connect(SessionManager *m, const SessionProfile *p) {
+    session_manager_connect_to(m, p, NULL, m->connect, m->data, NULL);
 }
 
 enum { NAME, TYPE, HOST, PORT, USER, AUTH, IDENTITY, DEVICE, BAUD, BITS, PARITY, STOP, FLOW, AUTO, INITIAL,
@@ -367,6 +386,7 @@ void session_manager_show(SessionManager *m) {
     row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_append(GTK_BOX(box), row);
     button(GTK_BOX(row), "Disconnect current pane", G_CALLBACK(current_clicked), m, TRUE);
     GtkWidget *reconnect = gtk_button_new_with_label("Reconnect current pane"); g_object_set_data(G_OBJECT(reconnect), "reconnect", GINT_TO_POINTER(TRUE));
+    gtk_widget_set_tooltip_text(reconnect, "Reconnect in the selected pane, keeping its output and split layout. Cancelling password entry keeps the existing connection.");
     g_signal_connect(reconnect, "clicked", G_CALLBACK(current_clicked), m); gtk_box_append(GTK_BOX(row), reconnect);
     m->message = gtk_label_new(m->load_error ? m->load_error : "Select a profile, then Connect. Each connection opens a new tab.");
     gtk_label_set_wrap(GTK_LABEL(m->message), TRUE); gtk_box_append(GTK_BOX(box), m->message); refresh(m);

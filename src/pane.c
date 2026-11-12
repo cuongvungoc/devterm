@@ -4,6 +4,9 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <unistd.h>
+
+typedef enum { RECONNECT_NONE, RECONNECT_PASSWORD, RECONNECT_STOPPING, RECONNECT_STARTING } ReconnectState;
 
 struct TerminalPane {
     int refs;
@@ -24,20 +27,49 @@ struct TerminalPane {
     SessionProfile *profile;
     GCancellable *spawn_cancel;
     gboolean disconnecting;
+    ReconnectState reconnect;
+    GCancellable *reconnect_cancel;
+    int reconnect_fd;
+    guint reconnect_idle, stop_timeout;
     PaneEvent selected;
     PaneEvent status;
     gpointer user_data;
 };
 
-static TerminalPane *pane_ref(TerminalPane *p) { p->refs++; return p; }
-static void pane_unref(TerminalPane *p) {
+TerminalPane *pane_ref(TerminalPane *p) { p->refs++; return p; }
+void pane_unref(TerminalPane *p) {
     if (--p->refs) return;
     g_object_unref(p->root);
     g_free(p->working_directory);
     session_profile_free(p->profile);
     g_clear_object(&p->spawn_cancel);
+    g_clear_object(&p->reconnect_cancel);
     g_free(p);
 }
+
+static void pane_message(TerminalPane *p, const char *message) {
+    if (p->closed) return;
+    gtk_label_set_text(GTK_LABEL(p->label), message);
+    if (p->status) p->status(p, message, p->user_data);
+}
+static void clear_reconnect(TerminalPane *p) {
+    if (p->reconnect_idle) { g_source_remove(p->reconnect_idle); p->reconnect_idle = 0; }
+    if (p->stop_timeout) { g_source_remove(p->stop_timeout); p->stop_timeout = 0; }
+    if (p->reconnect_fd >= 0) { close(p->reconnect_fd); p->reconnect_fd = -1; }
+    p->reconnect = RECONNECT_NONE;
+    g_clear_object(&p->reconnect_cancel);
+    if (!p->closed) vte_terminal_set_input_enabled(p->terminal, TRUE);
+}
+static void cancel_reconnect(TerminalPane *p) {
+    /* Cancelling a password dialog can synchronously release the request and
+     * clear p->reconnect_cancel. Keep the cancellable alive during emission. */
+    if (p->reconnect_cancel) {
+        GCancellable *cancel = g_object_ref(p->reconnect_cancel);
+        g_cancellable_cancel(cancel); g_object_unref(cancel);
+    }
+    clear_reconnect(p);
+}
+static void maybe_reconnect(TerminalPane *p);
 
 static void on_focus(GtkEventControllerFocus *controller, gpointer data) {
     (void)controller;
@@ -239,17 +271,17 @@ static void on_exit(VteTerminal *terminal, int status, gpointer data) {
     (void)terminal;
     TerminalPane *p = data;
     p->running = FALSE;
-    p->starting = FALSE;
     p->exited = TRUE;
     p->child = 0;
     if (p->closed) return;
+    if (p->reconnect == RECONNECT_STOPPING) { maybe_reconnect(p); return; }
+    if (p->reconnect == RECONNECT_STARTING) clear_reconnect(p);
     char *message;
     const char *kind = p->profile ? "Session" : "Shell";
     if (WIFEXITED(status)) message = g_strdup_printf("%s exited (code %d). Output is retained; close the pane or reconnect.", kind, WEXITSTATUS(status));
     else if (WIFSIGNALED(status)) message = g_strdup_printf("%s ended (signal %d). Output is retained.", kind, WTERMSIG(status));
     else message = g_strdup_printf("%s ended. Output is retained.", kind);
-    gtk_label_set_text(GTK_LABEL(p->label), message);
-    if (p->status) p->status(p, message, p->user_data);
+    pane_message(p, message);
     g_free(message);
 }
 
@@ -265,25 +297,76 @@ static void on_spawn(VteTerminal *terminal, GPid pid, GError *error, gpointer da
     TerminalPane *p = data;
     p->starting = FALSE;
     if (p->closed || p->disconnecting) {
-        if (pid > 0) kill(pid, SIGHUP);
-        if (!p->closed && error) gtk_label_set_text(GTK_LABEL(p->label), "Session connection cancelled");
+        if (pid > 0 && !p->exited) { p->child = pid; kill(pid, SIGHUP); }
+        if (!p->closed && error && p->reconnect != RECONNECT_STOPPING) pane_message(p, "Session connection cancelled");
     } else if (error) {
+        if (p->reconnect == RECONNECT_STARTING) clear_reconnect(p);
         char *message = g_strdup_printf("Cannot start %s: %s", p->profile ? "session" : "shell", error->message);
-        gtk_label_set_text(GTK_LABEL(p->label), message);
-        if (p->status) p->status(p, message, p->user_data);
+        pane_message(p, message);
         g_free(message);
     } else {
         if (!p->exited) {
             p->child = pid;
             p->running = TRUE;
-            gtk_label_set_text(GTK_LABEL(p->label), p->profile ? p->profile->name : "Terminal");
+            if (p->reconnect == RECONNECT_STARTING) clear_reconnect(p);
+            pane_message(p, p->profile ? p->profile->name : "Terminal");
         }
     }
+    maybe_reconnect(p);
     pane_unref(p);
+}
+
+static void spawn_session(TerminalPane *p, int fd) {
+    char *self = g_file_read_link("/proc/self/exe", NULL);
+    char *directory = self ? g_path_get_dirname(self) : g_get_current_dir();
+    char *helper = g_build_filename(directory, "devterm-connect", NULL);
+    g_free(self); g_free(directory);
+    const char *argv[] = {helper, "--session", NULL}; int map_fd = 3;
+    p->starting = TRUE;
+    /* VTE takes ownership of fd, including on spawn failure. */
+    vte_terminal_spawn_with_fds_async(p->terminal, VTE_PTY_DEFAULT, p->working_directory, argv, NULL,
+        &fd, 1, &map_fd, 1, G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, p->spawn_cancel, on_spawn, pane_ref(p));
+    g_free(helper);
+}
+static gboolean restart_session(gpointer data) {
+    TerminalPane *p = data; p->reconnect_idle = 0;
+    if (p->closed || p->reconnect != RECONNECT_STOPPING) return G_SOURCE_REMOVE;
+    if (p->stop_timeout) { g_source_remove(p->stop_timeout); p->stop_timeout = 0; }
+    g_clear_object(&p->spawn_cancel); p->spawn_cancel = g_cancellable_new();
+    p->exited = FALSE; p->disconnecting = FALSE;
+    p->reconnect = RECONNECT_STARTING;
+    /* VTE 0.76 ignores API reset while input is disabled. Enable only for
+     * this synchronous call; no user input is dispatched in between. */
+    vte_terminal_set_input_enabled(p->terminal, TRUE);
+    vte_terminal_reset(p->terminal, TRUE, FALSE);
+    vte_terminal_set_input_enabled(p->terminal, FALSE);
+    /* reset(clear_history=FALSE) leaves the active screen unchanged. Return
+     * to the normal buffer and append below its visible content. Switching
+     * screens can restore a cursor above old output, which must not be
+     * overwritten. These bytes are display output, never child input. */
+    char *restore = g_strdup_printf("\033[?47l\033[%ld;1H\r\n", vte_terminal_get_row_count(p->terminal));
+    vte_terminal_feed(p->terminal, restore, -1); g_free(restore);
+    pane_message(p, "Reconnecting…");
+    int fd = p->reconnect_fd; p->reconnect_fd = -1;
+    spawn_session(p, fd);
+    return G_SOURCE_REMOVE;
+}
+static void maybe_reconnect(TerminalPane *p) {
+    if (p->closed || p->reconnect != RECONNECT_STOPPING || p->starting || p->running || p->child > 0 || p->reconnect_idle) return;
+    /* child-exited has a VTE default handler. Respawn only after signal
+     * dispatch and the old spawn callback have both finished. */
+    p->reconnect_idle = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, restart_session, pane_ref(p), (GDestroyNotify)pane_unref);
+}
+static gboolean stop_timed_out(gpointer data) {
+    TerminalPane *p = data; p->stop_timeout = 0;
+    clear_reconnect(p);
+    pane_message(p, "Reconnect stopped: previous connection has not exited. Wait for it to end and retry.");
+    return G_SOURCE_REMOVE;
 }
 
 static TerminalPane *pane_create(const char *working_directory, const SessionProfile *profile, const char *password, PaneEvent selected, PaneEvent status, gpointer user_data) {
     TerminalPane *p = g_new0(TerminalPane, 1);
+    p->reconnect_fd = -1;
     p->refs = 1;
     p->selected = selected;
     p->status = status;
@@ -364,15 +447,7 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
         GError *error = NULL;
         int fd = session_launch_fd(profile, password, &error);
         if (fd < 0) { gtk_label_set_text(GTK_LABEL(p->label), error->message); g_clear_error(&error); return p; }
-        char *self = g_file_read_link("/proc/self/exe", NULL);
-        char *directory = self ? g_path_get_dirname(self) : g_get_current_dir();
-        char *helper = g_build_filename(directory, "devterm-connect", NULL);
-        g_free(self); g_free(directory);
-        const char *argv[] = {helper, "--session", NULL}; int map_fd = 3;
-        p->starting = TRUE;
-        vte_terminal_spawn_with_fds_async(p->terminal, VTE_PTY_DEFAULT, p->working_directory, argv, NULL,
-            &fd, 1, &map_fd, 1, G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, p->spawn_cancel, on_spawn, pane_ref(p));
-        g_free(helper); return p;
+        spawn_session(p, fd); return p;
     }
     const char *shell = g_getenv("SHELL");
     if (!shell || !g_path_is_absolute(shell) || !g_file_test(shell, G_FILE_TEST_IS_REGULAR) ||
@@ -390,8 +465,44 @@ TerminalPane *pane_new_session(const SessionProfile *profile, const char *passwo
     return pane_create(NULL, profile, password, selected, status, data);
 }
 const SessionProfile *pane_session_profile(TerminalPane *p) { return p ? p->profile : NULL; }
+GCancellable *pane_prepare_reconnect(TerminalPane *p) {
+    if (!p || p->closed || !p->profile) return NULL;
+    if (p->reconnect != RECONNECT_NONE) { pane_message(p, "Reconnect already in progress for this pane"); return NULL; }
+    p->reconnect = RECONNECT_PASSWORD;
+    p->reconnect_cancel = g_cancellable_new();
+    vte_terminal_set_input_enabled(p->terminal, FALSE);
+    pane_message(p, "Preparing reconnect… Existing connection is retained until credentials are ready.");
+    return p->reconnect_cancel;
+}
+void pane_reconnect_ready(TerminalPane *p, const SessionProfile *profile, const char *password) {
+    if (p->closed || p->reconnect != RECONNECT_PASSWORD || g_cancellable_is_cancelled(p->reconnect_cancel)) return;
+    GError *error = NULL;
+    /* Validate/serialize before touching the old connection. The request's
+     * profile is a snapshot of this pane, with its latest remember choice. */
+    int fd = session_launch_fd(profile, password, &error);
+    if (fd < 0) {
+        clear_reconnect(p); pane_message(p, error->message); g_clear_error(&error); return;
+    }
+    p->profile->remember = profile->remember;
+    p->reconnect_fd = fd;
+    p->reconnect = RECONNECT_STOPPING;
+    p->disconnecting = TRUE;
+    pane_message(p, "Stopping previous connection…");
+    g_cancellable_cancel(p->spawn_cancel);
+    if (p->child > 0) kill(p->child, SIGHUP);
+    p->stop_timeout = g_timeout_add_seconds_full(G_PRIORITY_DEFAULT, 5, stop_timed_out, pane_ref(p), (GDestroyNotify)pane_unref);
+    maybe_reconnect(p);
+}
+void pane_finish_reconnect_request(TerminalPane *p) {
+    if (p->closed || p->reconnect != RECONNECT_PASSWORD) return;
+    clear_reconnect(p);
+    pane_message(p, p->running && !p->disconnecting ? p->profile->name :
+        "Reconnect cancelled; pane output is retained.");
+}
+gboolean pane_is_reconnecting(TerminalPane *p) { return p && !p->closed && p->reconnect != RECONNECT_NONE; }
 void pane_disconnect(TerminalPane *p) {
     if (!p || p->closed || !p->profile) return;
+    cancel_reconnect(p);
     p->disconnecting = TRUE; g_cancellable_cancel(p->spawn_cancel);
     if (p->child > 0) kill(p->child, SIGHUP);
 }
@@ -436,7 +547,7 @@ gboolean pane_copy_all_text(TerminalPane *p, GError **error) {
     g_bytes_unref(text);
     return TRUE;
 }
-gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && !p->disconnecting && p->running; }
+gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && !p->disconnecting && p->reconnect == RECONNECT_NONE && p->running; }
 gboolean pane_has_live_session(TerminalPane *p) { return p && !p->closed && (p->starting || p->running); }
 char *pane_dup_working_directory(TerminalPane *p) {
     /* Read the local shell process, never a remote OSC 7 directory from SSH. */
@@ -451,6 +562,7 @@ char *pane_dup_working_directory(TerminalPane *p) {
     return g_strdup(g_get_home_dir());
 }
 void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
+    if (!pane_is_running(p)) return;
     vte_terminal_feed_child(p->terminal, command, -1);
     if (send_enter) vte_terminal_feed_child(p->terminal, "\r", 1);
     pane_focus(p);
@@ -458,6 +570,7 @@ void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
 void pane_close(TerminalPane *p) {
     if (!p || p->closed) return;
     p->closed = TRUE;
+    cancel_reconnect(p);
     g_cancellable_cancel(p->spawn_cancel);
     search_cancel_timeout(p);
     if (p->child > 0) kill(p->child, SIGHUP);

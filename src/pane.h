@@ -8,8 +8,17 @@ typedef void (*PaneEvent)(TerminalPane *pane, const char *message, gpointer user
 
 TerminalPane *pane_new(const char *working_directory, PaneEvent selected, PaneEvent status, gpointer user_data);
 TerminalPane *pane_new_session(const SessionProfile *profile, const char *password, PaneEvent selected, PaneEvent status, gpointer user_data);
+TerminalPane *pane_ref(TerminalPane *pane);
+void pane_unref(TerminalPane *pane);
 const SessionProfile *pane_session_profile(TerminalPane *pane);
 void pane_disconnect(TerminalPane *pane);
+/* Prepare locks this pane as the reconnect target without stopping its child.
+ * NULL means unavailable/busy; returned cancellable is borrowed. The credential
+ * request must hold a pane_ref and call pane_finish_reconnect_request on release. */
+GCancellable *pane_prepare_reconnect(TerminalPane *pane);
+void pane_reconnect_ready(TerminalPane *pane, const SessionProfile *profile, const char *password);
+void pane_finish_reconnect_request(TerminalPane *pane);
+gboolean pane_is_reconnecting(TerminalPane *pane);
 GtkWidget *pane_widget(TerminalPane *pane);
 void pane_set_active(TerminalPane *pane, gboolean active);
 void pane_focus(TerminalPane *pane);

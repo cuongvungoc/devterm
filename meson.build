@@ -23,7 +23,7 @@ runtime_src = []
 if get_option('bundled_runtime')
     runtime_src = files('src/runtime.c')
 endif
-executable('devterm', ['src/main.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
+executable('devterm', ['src/main.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
 executable('devterm-connect', ['src/connect-helper.c', 'src/sessions.c', 'src/login.c', runtime_src], dependencies: [gtk, json, gio, util], install: true)
 test_exe = executable('test-commands', ['tests/test-commands.c', src], dependencies: [json, gio])
 test('commands', test_exe)
@@ -43,3 +43,7 @@ test('session-ui', find_program('dbus-run-session'), args: ['--', session_ui_tes
 test('connections', find_program('python3'), args: [files('tests/test-connections.py'), meson.current_build_dir() / 'devterm-connect'], is_parallel: false, timeout: 90)
 draft_test = executable('test-draft', ['tests/test-draft.c', 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk])
 test('draft', draft_test, env: ['G_DEBUG=fatal-criticals'], is_parallel: false, timeout: 30)
+reconnect_test = executable('test-reconnect', ['tests/test-reconnect.c', terminal_src, 'src/sessions-ui.c', 'src/credentials.c', 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk, vte, json, gio, pcre, secret])
+test('reconnect', find_program('dbus-run-session'), args: ['--', reconnect_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals'], is_parallel: false, timeout: 90)
+quick_ui_test = executable('test-quick-ui', ['tests/test-quick-ui.c', 'src/quick-commands-ui.c', 'src/confirm-dialog.c', src], dependencies: [gtk, json, gio])
+test('quick-ui', quick_ui_test, env: ['G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)

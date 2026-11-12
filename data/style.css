@@ -63,3 +63,7 @@
 .devterm-dialog .settings-list row:selected { background: @dt_soft; color: @dt_fg; }
 .devterm-dialog .protocol-badge { color: @dt_accent; background: @dt_soft; padding: 5px 8px; border-radius: 6px; font-size: .85em; font-weight: 600; }
 .devterm-dialog .error, .devterm-window .error { color: @dt_danger; }
+/* Inset indicators do not change button sizes while dragging. */
+.devterm-window .quick-command.drop-before { box-shadow: inset 3px 0 @dt_accent; }
+.devterm-window .quick-command.drop-after { box-shadow: inset -3px 0 @dt_accent; }
+.devterm-window .quick-command.drag-source { opacity: .55; }

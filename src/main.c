@@ -1,4 +1,4 @@
-#include "commands.h"
+#include "quick-commands-ui.h"
 #include "split-layout.h"
 #include "text-export.h"
 #include "sessions-ui.h"
@@ -23,7 +23,7 @@ struct TerminalTab {
     GtkWidget *close_dialog;
 };
 struct App {
-    GtkWidget *window, *workspace, *notebook, *quick_bar, *status, *manage_dialog, *manage_rows;
+    GtkWidget *window, *workspace, *notebook, *quick_bar, *status;
     GtkWidget *draft_button, *counts, *command_add, *command_manage;
     GtkCssProvider *style; /* Borrowed from GtkApplication; shared by windows. */
     GCancellable *export_cancel;
@@ -33,15 +33,10 @@ struct App {
     TerminalTab *active_tab;
     guint next_tab_id, focus_idle;
     gboolean shutting_down;
-    GPtrArray *commands;
-    char *config_path;
-    gboolean config_valid;
+    QuickCommandsUI *quick_commands;
     SessionManager *sessions;
 };
 
-static void refresh_commands(App *app);
-static void refresh_manage(App *app);
-static void show_editor(App *app, const char *id);
 static void on_new(GtkButton *button, gpointer data);
 static void request_close_tab(TerminalTab *tab);
 static void on_draft_toggle(GtkToggleButton *button, gpointer data);
@@ -246,16 +241,26 @@ static void on_new(GtkButton *button, gpointer data) {
 static void on_session_connect(const SessionProfile *profile, const char *password, gpointer data) {
     open_tab(data, NULL, profile, password);
 }
+static void on_reconnect_ready(const SessionProfile *profile, const char *password, gpointer data) {
+    pane_reconnect_ready(data, profile, password);
+}
+static void on_reconnect_request_done(gpointer data) {
+    pane_finish_reconnect_request(data);
+    pane_unref(data);
+}
 static void on_current_session(gboolean reconnect, gpointer data) {
     App *app = data; if (app->shutting_down) return;
     TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
     const SessionProfile *profile = pane_session_profile(pane);
     if (!profile) { status(app, "Select a connected-session pane first"); return; }
-    SessionProfile *copy = session_profile_copy(profile);
-    pane_disconnect(pane);
-    if (reconnect) session_manager_connect(app->sessions, copy);
-    else status(app, "Disconnect requested; pane output is retained");
-    session_profile_free(copy);
+    if (reconnect) {
+        GCancellable *cancel = pane_prepare_reconnect(pane);
+        if (cancel) session_manager_connect_to(app->sessions, profile, cancel,
+            on_reconnect_ready, pane_ref(pane), on_reconnect_request_done);
+    } else {
+        pane_disconnect(pane);
+        status(app, "Disconnect requested; pane output is retained");
+    }
 }
 static void on_sessions(GtkButton *button, gpointer data) { (void)button; App *app = data; session_manager_show(app->sessions); }
 static void on_split_right(GtkButton *button, gpointer data) {
@@ -398,223 +403,21 @@ static void action_cycle_tab(GSimpleAction *action, GVariant *parameter, gpointe
     schedule_focus(app);
 }
 
-static gint command_index(App *app, const char *id) {
-    for (guint i = 0; i < app->commands->len; i++) {
-        QuickCommand *item = g_ptr_array_index(app->commands, i);
-        if (g_strcmp0(item->id, id) == 0) return (gint)i;
-    }
-    return -1;
-}
-static void save_commands(App *app) {
-    GError *error = NULL;
-    if (!commands_save(app->config_path, app->commands, &error)) {
-        char *message = g_strdup_printf("Cannot save Quick Commands: %s", error->message);
-        status(app, message); g_free(message); g_clear_error(&error);
-    } else status(app, "Quick Commands saved");
-}
-static void on_command(GtkButton *button, gpointer data) {
+static void on_quick_status(gpointer data, const char *message) { status(data, message); }
+static void on_quick_command(const QuickCommand *item, gpointer data) {
     App *app = data;
-    const char *id = g_object_get_data(G_OBJECT(button), "command-id");
-    gint index = command_index(app, id);
-    if (index < 0) return;
     TerminalPane *active = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
     if (!active) { status(app, "Select a terminal pane before sending a command"); return; }
-    if (!pane_is_running(active)) { status(app, "Selected pane has no running shell. Close it and create a new terminal."); return; }
-    QuickCommand *item = g_ptr_array_index(app->commands, index);
+    if (!pane_is_running(active)) {
+        status(app, pane_is_reconnecting(active) ? "Wait for reconnect to finish before sending Quick Commands." :
+            "Selected pane has no running session. Reconnect it or create a new terminal."); return;
+    }
     pane_send(active, item->command, item->send_enter);
     status(app, item->send_enter ? "Command sent to selected pane" : "Command inserted in selected pane");
-}
-static void on_add(GtkButton *button, gpointer data) { (void)button; show_editor(data, NULL); }
-static void on_manage(GtkButton *button, gpointer data);
-static void refresh_commands(App *app) {
-    GtkWidget *child;
-    while ((child = gtk_widget_get_first_child(app->quick_bar))) gtk_flow_box_remove(GTK_FLOW_BOX(app->quick_bar), child);
-    gtk_widget_set_sensitive(app->command_add, app->config_valid);
-    gtk_widget_set_sensitive(app->command_manage, app->config_valid);
-    if (app->commands->len == 0) {
-        GtkWidget *label = gtk_label_new(app->config_valid ? "Your shortcuts, one click away. Use Add Command to get started." : "Configuration error. Fix commands.json to edit your shortcuts.");
-        gtk_label_set_wrap(GTK_LABEL(label), TRUE); gtk_label_set_xalign(GTK_LABEL(label), 0);
-        gtk_widget_add_css_class(label, "muted");
-        gtk_flow_box_append(GTK_FLOW_BOX(app->quick_bar), label);
-    } else {
-        for (guint i = 0; i < app->commands->len; i++) {
-            QuickCommand *item = g_ptr_array_index(app->commands, i);
-            GtkWidget *button = gtk_button_new_with_label(item->name);
-            GtkWidget *label = gtk_button_get_child(GTK_BUTTON(button));
-            gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END); gtk_label_set_max_width_chars(GTK_LABEL(label), 24);
-            gtk_label_set_width_chars(GTK_LABEL(label), MIN(g_utf8_strlen(item->name, -1), 24));
-            char *tip = g_strdup_printf("%s\n%s\n%s", item->name, item->command,
-                item->send_enter ? "Send text + Enter to the selected pane" : "Insert text without Enter into the selected pane");
-            gtk_widget_set_tooltip_text(button, tip); g_free(tip);
-            gtk_widget_add_css_class(button, "quick-command"); gtk_widget_set_focus_on_click(button, FALSE);
-            g_object_set_data_full(G_OBJECT(button), "command-id", g_strdup(item->id), g_free);
-            g_signal_connect(button, "clicked", G_CALLBACK(on_command), app);
-            gtk_flow_box_append(GTK_FLOW_BOX(app->quick_bar), button);
-        }
-    }
-}
-
-typedef struct { App *app; char *id; GtkWidget *name, *command, *enter, *error; } Editor;
-static void editor_free(gpointer data) { Editor *e = data; g_free(e->id); g_free(e); }
-static void on_editor_response(GtkDialog *dialog, int response, gpointer data) {
-    Editor *e = data;
-    if (response != GTK_RESPONSE_ACCEPT) { gtk_window_destroy(GTK_WINDOW(dialog)); return; }
-    const char *name = gtk_editable_get_text(GTK_EDITABLE(e->name));
-    const char *command = gtk_editable_get_text(GTK_EDITABLE(e->command));
-    gboolean name_ok = FALSE, command_ok = FALSE;
-    for (const char *p = name; *p; p = g_utf8_next_char(p)) if (!g_unichar_isspace(g_utf8_get_char(p))) { name_ok = TRUE; break; }
-    for (const char *p = command; *p; p = g_utf8_next_char(p)) if (!g_unichar_isspace(g_utf8_get_char(p))) { command_ok = TRUE; break; }
-    if (!name_ok || !command_ok) { gtk_label_set_text(GTK_LABEL(e->error), "Name and command are required."); return; }
-    gint index = e->id ? command_index(e->app, e->id) : -1;
-    if (e->id && index < 0) { gtk_window_destroy(GTK_WINDOW(dialog)); return; }
-    QuickCommand *item;
-    if (index >= 0) {
-        item = g_ptr_array_index(e->app->commands, index);
-        g_free(item->name); g_free(item->command);
-        item->name = g_strdup(name); item->command = g_strdup(command);
-        item->send_enter = gtk_check_button_get_active(GTK_CHECK_BUTTON(e->enter));
-    } else {
-        char *id = g_uuid_string_random();
-        item = quick_command_new(id, name, command, gtk_check_button_get_active(GTK_CHECK_BUTTON(e->enter)));
-        g_ptr_array_add(e->app->commands, item);
-        g_free(id);
-    }
-    save_commands(e->app);
-    refresh_commands(e->app);
-    refresh_manage(e->app);
-    gtk_window_destroy(GTK_WINDOW(dialog));
-}
-static void show_editor(App *app, const char *id) {
-    if (!app->config_valid) return;
-    GtkWidget *parent = app->manage_dialog ? app->manage_dialog : app->window;
-    GtkWidget *dialog = gtk_dialog_new_with_buttons(id ? "Edit Command" : "Add Command", GTK_WINDOW(parent), GTK_DIALOG_MODAL,
-                                                    "Cancel", GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_ACCEPT, NULL);
-    gtk_widget_add_css_class(dialog, "devterm-dialog");
-    gtk_widget_add_css_class(gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT), "suggested-action");
-    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
-    Editor *e = g_new0(Editor, 1); e->app = app; e->id = g_strdup(id);
-    g_object_set_data_full(G_OBJECT(dialog), "editor", e, editor_free);
-    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_box_set_spacing(GTK_BOX(box), 8);
-    gtk_widget_set_margin_start(box, 16); gtk_widget_set_margin_end(box, 16);
-    gtk_widget_set_margin_top(box, 12); gtk_widget_set_margin_bottom(box, 12);
-    GtkWidget *name_label = gtk_label_new("Name"); gtk_label_set_xalign(GTK_LABEL(name_label), 0);
-    gtk_box_append(GTK_BOX(box), name_label);
-    e->name = gtk_entry_new(); gtk_box_append(GTK_BOX(box), e->name);
-    gtk_accessible_update_property(GTK_ACCESSIBLE(e->name), GTK_ACCESSIBLE_PROPERTY_LABEL, "Name", -1);
-    GtkWidget *command_label = gtk_label_new("Command"); gtk_label_set_xalign(GTK_LABEL(command_label), 0);
-    gtk_box_append(GTK_BOX(box), command_label);
-    e->command = gtk_entry_new(); gtk_widget_set_size_request(e->command, 420, -1);
-    gtk_accessible_update_property(GTK_ACCESSIBLE(e->command), GTK_ACCESSIBLE_PROPERTY_LABEL, "Command", -1);
-    gtk_box_append(GTK_BOX(box), e->command);
-    e->enter = gtk_check_button_new_with_label("Send Enter after command");
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(e->enter), TRUE);
-    gtk_box_append(GTK_BOX(box), e->enter);
-    GtkWidget *hint = gtk_label_new("Input goes to the foreground program in the selected terminal (including SSH, vim or top).");
-    gtk_label_set_wrap(GTK_LABEL(hint), TRUE); gtk_label_set_xalign(GTK_LABEL(hint), 0);
-    gtk_widget_add_css_class(hint, "muted"); gtk_box_append(GTK_BOX(box), hint);
-    e->error = gtk_label_new(""); gtk_widget_add_css_class(e->error, "error"); gtk_box_append(GTK_BOX(box), e->error);
-    gint index = id ? command_index(app, id) : -1;
-    if (index >= 0) {
-        QuickCommand *item = g_ptr_array_index(app->commands, index);
-        gtk_editable_set_text(GTK_EDITABLE(e->name), item->name);
-        gtk_editable_set_text(GTK_EDITABLE(e->command), item->command);
-        gtk_check_button_set_active(GTK_CHECK_BUTTON(e->enter), item->send_enter);
-    }
-    g_signal_connect(dialog, "response", G_CALLBACK(on_editor_response), e);
-    gtk_window_present(GTK_WINDOW(dialog));
-}
-
-typedef struct { App *app; char *id; int action; } RowAction;
-static void row_action_free(gpointer data) { RowAction *a = data; g_free(a->id); g_free(a); }
-static void on_row_action(GtkButton *button, gpointer data) {
-    (void)button;
-    RowAction *a = data;
-    gint index = command_index(a->app, a->id);
-    if (index < 0) return;
-    if (a->action == 0) { show_editor(a->app, a->id); return; }
-    if (a->action == 1) g_ptr_array_remove_index(a->app->commands, index);
-    else {
-        gint target = index + (a->action == 2 ? -1 : 1);
-        if (target < 0 || target >= (gint)a->app->commands->len) return;
-        gpointer temp = a->app->commands->pdata[index];
-        a->app->commands->pdata[index] = a->app->commands->pdata[target];
-        a->app->commands->pdata[target] = temp;
-    }
-    save_commands(a->app);
-    refresh_commands(a->app);
-    refresh_manage(a->app);
-}
-static GtkWidget *row_button(App *app, const char *id, const char *text, int action, gboolean enabled) {
-    GtkWidget *button = action >= 2 ? gtk_button_new_from_icon_name(action == 2 ? "go-previous-symbolic" : "go-next-symbolic") : gtk_button_new_with_label(text);
-    if (action >= 2) {
-        const char *name = action == 2 ? "Move Left" : "Move Right";
-        gtk_widget_set_tooltip_text(button, name);
-        gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, name, -1);
-    }
-    if (action == 1) gtk_widget_add_css_class(button, "danger");
-    RowAction *a = g_new0(RowAction, 1); a->app = app; a->id = g_strdup(id); a->action = action;
-    g_object_set_data_full(G_OBJECT(button), "row-action", a, row_action_free);
-    g_signal_connect(button, "clicked", G_CALLBACK(on_row_action), a);
-    gtk_widget_set_sensitive(button, enabled);
-    return button;
-}
-static void refresh_manage(App *app) {
-    if (!app->manage_rows) return;
-    GtkWidget *child;
-    while ((child = gtk_widget_get_first_child(app->manage_rows))) gtk_box_remove(GTK_BOX(app->manage_rows), child);
-    for (guint i = 0; i < app->commands->len; i++) {
-        QuickCommand *item = g_ptr_array_index(app->commands, i);
-        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-        gtk_widget_add_css_class(row, "command-row");
-        GtkWidget *label = gtk_label_new(item->name);
-        gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END); gtk_label_set_max_width_chars(GTK_LABEL(label), 32);
-        gtk_widget_set_hexpand(label, TRUE); gtk_widget_set_halign(label, GTK_ALIGN_START);
-        gtk_widget_set_tooltip_text(label, item->command);
-        gtk_box_append(GTK_BOX(row), label);
-        gtk_box_append(GTK_BOX(row), row_button(app, item->id, "←", 2, i > 0));
-        gtk_box_append(GTK_BOX(row), row_button(app, item->id, "→", 3, i + 1 < app->commands->len));
-        gtk_box_append(GTK_BOX(row), row_button(app, item->id, "Edit", 0, TRUE));
-        gtk_box_append(GTK_BOX(row), row_button(app, item->id, "Delete", 1, TRUE));
-        gtk_box_append(GTK_BOX(app->manage_rows), row);
-    }
-}
-static void on_manage_destroy(GtkWidget *widget, gpointer data) {
-    App *app = data;
-    if (app->manage_dialog == widget) { app->manage_dialog = NULL; app->manage_rows = NULL; }
 }
 static void on_manage_response(GtkDialog *dialog, int response, gpointer data) {
     (void)response; (void)data; gtk_window_destroy(GTK_WINDOW(dialog));
 }
-static void on_manage(GtkButton *button, gpointer data) {
-    (void)button;
-    App *app = data;
-    if (app->manage_dialog) { gtk_window_present(GTK_WINDOW(app->manage_dialog)); return; }
-    GtkWidget *dialog = gtk_dialog_new_with_buttons("Manage Quick Commands", GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
-                                                    "Close", GTK_RESPONSE_CLOSE, NULL);
-    gtk_widget_add_css_class(dialog, "devterm-dialog");
-    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
-    app->manage_dialog = dialog;
-    gtk_window_set_default_size(GTK_WINDOW(dialog), 650, 350);
-    GtkWidget *area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_box_set_spacing(GTK_BOX(area), 8);
-    gtk_widget_set_margin_start(area, 12); gtk_widget_set_margin_end(area, 12);
-    gtk_widget_set_margin_top(area, 12); gtk_widget_set_margin_bottom(area, 12);
-    GtkWidget *add = gtk_button_new_with_label("Add Command");
-    g_signal_connect(add, "clicked", G_CALLBACK(on_add), app);
-    gtk_box_append(GTK_BOX(area), add);
-    GtkWidget *scroll = gtk_scrolled_window_new();
-    gtk_widget_set_vexpand(scroll, TRUE);
-    app->manage_rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-    gtk_widget_add_css_class(app->manage_rows, "settings-list");
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), app->manage_rows);
-    gtk_box_append(GTK_BOX(area), scroll);
-    refresh_manage(app);
-    g_signal_connect(dialog, "response", G_CALLBACK(on_manage_response), app);
-    g_signal_connect(dialog, "destroy", G_CALLBACK(on_manage_destroy), app);
-    gtk_window_present(GTK_WINDOW(dialog));
-}
-
 static void show_shortcuts(App *app) {
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Keyboard Shortcuts", GTK_WINDOW(app->window), GTK_DIALOG_MODAL, "Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_widget_add_css_class(dialog, "devterm-dialog"); gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
@@ -657,6 +460,7 @@ static void on_window_destroy(GtkWidget *window, gpointer data) {
     App *app = data;
     if (app->shutting_down) return;
     app->shutting_down = TRUE;
+    g_clear_pointer(&app->quick_commands, quick_commands_ui_free);
     GtkWidget *dialog = g_steal_pointer(&app->window_close_dialog);
     if (dialog) gtk_window_destroy(GTK_WINDOW(dialog));
     g_clear_pointer(&app->sessions, session_manager_free);
@@ -711,11 +515,10 @@ static void app_free(gpointer data) {
     App *app = data;
     if (app->focus_idle) g_source_remove(app->focus_idle);
     g_ptr_array_unref(app->tabs);
-    g_ptr_array_unref(app->commands);
+    g_clear_pointer(&app->quick_commands, quick_commands_ui_free);
     g_clear_object(&app->notebook);
     g_clear_object(&app->export_cancel);
     g_clear_pointer(&app->sessions, session_manager_free);
-    g_free(app->config_path);
     g_free(app);
 }
 static void activate(GtkApplication *application, gpointer data) {
@@ -833,9 +636,9 @@ static void activate(GtkApplication *application, gpointer data) {
     GtkWidget *dock_title = gtk_label_new("Quick Commands"); gtk_widget_add_css_class(dock_title, "section-title");
     gtk_widget_set_halign(dock_title, GTK_ALIGN_START); gtk_widget_set_hexpand(dock_title, TRUE); gtk_box_append(GTK_BOX(dock_header), dock_title);
     app->command_add = ui_button("list-add-symbolic", "Add Command", "Create a custom command button");
-    g_signal_connect(app->command_add, "clicked", G_CALLBACK(on_add), app); gtk_box_append(GTK_BOX(dock_header), app->command_add);
+    gtk_box_append(GTK_BOX(dock_header), app->command_add);
     app->command_manage = ui_button("emblem-system-symbolic", "Manage", "Edit, reorder or remove Quick Commands");
-    g_signal_connect(app->command_manage, "clicked", G_CALLBACK(on_manage), app); gtk_box_append(GTK_BOX(dock_header), app->command_manage);
+    gtk_box_append(GTK_BOX(dock_header), app->command_manage);
     gtk_box_append(GTK_BOX(dock), dock_header);
     GtkWidget *quick_scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(quick_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
@@ -854,17 +657,10 @@ static void activate(GtkApplication *application, gpointer data) {
     gtk_box_append(GTK_BOX(footer), app->status); app->counts = gtk_label_new(""); gtk_box_append(GTK_BOX(footer), app->counts);
     gtk_widget_set_tooltip_text(app->counts, "Open tabs · Terminal panes in the current tab");
     gtk_box_append(GTK_BOX(outer), footer);
-    app->config_path = commands_config_path();
-    GError *error = NULL;
-    char *config_error = NULL;
-    app->commands = commands_load(app->config_path, &error);
-    app->config_valid = app->commands != NULL;
-    if (!app->config_valid) {
-        app->commands = g_ptr_array_new_with_free_func(quick_command_free);
-        config_error = g_strdup_printf("Quick Commands configuration error: %s. Fix the file before editing commands.", error->message);
-        g_clear_error(&error);
-    }
-    refresh_commands(app);
+    app->quick_commands = quick_commands_ui_new(GTK_WINDOW(app->window), GTK_FLOW_BOX(app->quick_bar),
+        GTK_SCROLLED_WINDOW(quick_scroll), app->command_add, app->command_manage,
+        on_quick_command, on_quick_status, app);
+    char *config_error = g_strdup(quick_commands_ui_load_error(app->quick_commands));
     app->sessions = session_manager_new(GTK_WINDOW(app->window), on_session_connect, on_current_session, app);
     on_new(NULL, app);
     if (config_error) { status(app, config_error); g_free(config_error); }
