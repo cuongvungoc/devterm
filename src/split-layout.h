@@ -2,6 +2,8 @@
 #include "pane.h"
 
 typedef struct SplitLayout SplitLayout;
+typedef void (*LayoutReconnect)(SplitLayout *layout, TerminalPane *pane, gpointer user_data);
+void split_layout_set_reconnect_handler(SplitLayout *layout, LayoutReconnect callback);
 typedef void (*LayoutStatus)(SplitLayout *layout, const char *message, gpointer user_data);
 
 SplitLayout *split_layout_new(const char *directory, LayoutStatus status, gpointer user_data);

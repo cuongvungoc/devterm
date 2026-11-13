@@ -13,6 +13,7 @@ struct SplitLayout {
     TerminalPane *active;
     gboolean track_focus;
     LayoutStatus status;
+    LayoutReconnect reconnect;
     gpointer user_data;
 };
 
@@ -31,9 +32,15 @@ static void pane_status(TerminalPane *pane, const char *message, gpointer data) 
     SplitLayout *layout = data;
     if (layout->status) layout->status(layout, message, layout->user_data);
 }
+static void request_reconnect(TerminalPane *pane, const char *message, gpointer data) {
+    (void)message; SplitLayout *layout = data;
+    if (layout->reconnect) layout->reconnect(layout, pane, layout->user_data);
+}
+void split_layout_set_reconnect_handler(SplitLayout *layout, LayoutReconnect callback) { layout->reconnect = callback; }
 static LayoutNode *leaf_new(SplitLayout *layout, const char *directory) {
     LayoutNode *node = g_new0(LayoutNode, 1);
     node->pane = pane_new(directory, selected, pane_status, layout);
+    pane_set_reconnect_handler(node->pane, request_reconnect);
     node->widget = pane_widget(node->pane);
     return node;
 }
@@ -137,6 +144,7 @@ SplitLayout *split_layout_new_session(const SessionProfile *profile, const char 
     gtk_widget_set_hexpand(layout->widget, TRUE); gtk_widget_set_vexpand(layout->widget, TRUE);
     LayoutNode *node = g_new0(LayoutNode, 1);
     node->pane = pane_new_session(profile, password, selected, pane_status, layout);
+    pane_set_reconnect_handler(node->pane, request_reconnect);
     node->widget = pane_widget(node->pane); layout->tree = node;
     gtk_box_append(GTK_BOX(layout->widget), node->widget); set_active(layout, node->pane);
     return layout;

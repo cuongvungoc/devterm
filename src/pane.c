@@ -1,4 +1,8 @@
+#define _GNU_SOURCE
 #include "pane.h"
+#include "ssh-host-key.h"
+#include <glib-unix.h>
+#include <sys/socket.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 #include <signal.h>
@@ -31,6 +35,13 @@ struct TerminalPane {
     GCancellable *reconnect_cancel;
     int reconnect_fd;
     guint reconnect_idle, stop_timeout;
+    GtkWidget *host_review_button, *host_dialog, *host_detail, *host_verified;
+    GCancellable *host_cancel;
+    SshHostKeyReview *host_review;
+    char *host_diagnostics;
+    int host_socket;
+    guint host_watch;
+    PaneEvent reconnect_requested;
     PaneEvent selected;
     PaneEvent status;
     gpointer user_data;
@@ -42,6 +53,9 @@ void pane_unref(TerminalPane *p) {
     g_object_unref(p->root);
     g_free(p->working_directory);
     session_profile_free(p->profile);
+    g_free(p->host_diagnostics);
+    g_clear_pointer(&p->host_review, ssh_host_key_unref);
+    g_clear_object(&p->host_cancel);
     g_clear_object(&p->spawn_cancel);
     g_clear_object(&p->reconnect_cancel);
     g_free(p);
@@ -52,6 +66,126 @@ static void pane_message(TerminalPane *p, const char *message) {
     gtk_label_set_text(GTK_LABEL(p->label), message);
     if (p->status) p->status(p, message, p->user_data);
 }
+static void host_review_cancel(TerminalPane *p) {
+    if (p->host_cancel) g_cancellable_cancel(p->host_cancel);
+    g_clear_object(&p->host_cancel);
+    g_clear_pointer(&p->host_review, ssh_host_key_unref);
+    GtkWidget *dialog = g_steal_pointer(&p->host_dialog);
+    if (dialog) gtk_window_destroy(GTK_WINDOW(dialog));
+}
+static void host_notice_close(TerminalPane *p) {
+    if (p->host_watch) { g_source_remove(p->host_watch); p->host_watch = 0; }
+    if (p->host_socket >= 0) { close(p->host_socket); p->host_socket = -1; }
+}
+static void host_notice_clear(TerminalPane *p) {
+    host_review_cancel(p); host_notice_close(p);
+    g_clear_pointer(&p->host_diagnostics, g_free); gtk_widget_set_visible(p->host_review_button, FALSE);
+}
+static gboolean host_notice(int fd, GIOCondition condition, gpointer data) {
+    (void)condition; TerminalPane *p = data; char packet[SSH_HOST_KEY_NOTICE_LIMIT + 128];
+    ssize_t size = recv(fd, packet, sizeof packet - 1, MSG_DONTWAIT);
+    if (!p->closed && size > (ssize_t)strlen(SSH_HOST_KEY_NOTICE) && size < (ssize_t)sizeof packet - 1 &&
+        !memcmp(packet, SSH_HOST_KEY_NOTICE, strlen(SSH_HOST_KEY_NOTICE)) && !memchr(packet, 0, size) && g_utf8_validate(packet, size, NULL)) {
+        packet[size] = 0; g_free(p->host_diagnostics); p->host_diagnostics = g_strdup(packet + strlen(SSH_HOST_KEY_NOTICE));
+        gtk_widget_set_visible(p->host_review_button, TRUE);
+        pane_message(p, "SSH host key has changed. Review the fingerprint before reconnecting.");
+    }
+    close(p->host_socket); p->host_socket = -1; p->host_watch = 0; return G_SOURCE_REMOVE;
+}
+static void host_dialog_destroyed(GtkWidget *dialog, gpointer data) {
+    TerminalPane *p = data;
+    if (p->host_dialog == dialog) {
+        p->host_dialog = NULL; host_review_cancel(p);
+        if (!p->closed && gtk_widget_get_mapped(p->root)) pane_focus(p);
+    }
+}
+static void host_replaced(GObject *source, GAsyncResult *result, gpointer data) {
+    (void)source; TerminalPane *p = data; GError *error = NULL;
+    gboolean ok = ssh_host_key_replace_finish(result, &error);
+    gboolean current = !p->closed && g_task_get_cancellable(G_TASK(result)) == p->host_cancel;
+    if (current) {
+        char *message = ok ? g_strdup_printf("SSH host key replaced. Backup: %s", p->host_review->backup) : g_strdup(error->message);
+        host_review_cancel(p); pane_message(p, message); g_free(message);
+        if (ok) {
+            g_clear_pointer(&p->host_diagnostics, g_free); gtk_widget_set_visible(p->host_review_button, FALSE);
+            if (p->reconnect_requested) p->reconnect_requested(p, NULL, p->user_data);
+        }
+    }
+    g_clear_error(&error); pane_unref(p);
+}
+static void host_verified(GtkCheckButton *button, gpointer data) {
+    TerminalPane *p = data;
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(p->host_dialog), GTK_RESPONSE_ACCEPT,
+        p->host_review && gtk_check_button_get_active(button));
+}
+static void host_response(GtkDialog *dialog, int response, gpointer data) {
+    TerminalPane *p = data;
+    if (response == 1 && p->host_review) { gdk_clipboard_set_text(gtk_widget_get_clipboard(p->root), p->host_review->fingerprint); return; }
+    if (response == GTK_RESPONSE_ACCEPT) {
+        if (!p->host_review || !gtk_check_button_get_active(GTK_CHECK_BUTTON(p->host_verified))) return;
+        gtk_dialog_set_response_sensitive(dialog, GTK_RESPONSE_ACCEPT, FALSE);
+        gtk_dialog_set_response_sensitive(dialog, GTK_RESPONSE_CANCEL, FALSE);
+        gtk_dialog_set_response_sensitive(dialog, 1, FALSE); gtk_widget_set_sensitive(p->host_verified, FALSE);
+        gtk_label_set_text(GTK_LABEL(p->host_detail), "Updating known_hosts and creating a backup…");
+        ssh_host_key_replace_async(p->host_review, p->host_cancel, host_replaced, pane_ref(p)); return;
+    }
+    host_review_cancel(p); if (!p->closed && gtk_widget_get_mapped(p->root)) pane_focus(p);
+}
+static gboolean host_dialog_key(GtkEventControllerKey *controller, guint key, guint code, GdkModifierType state, gpointer data) {
+    (void)controller; (void)code; (void)state; TerminalPane *p = data;
+    if (key != GDK_KEY_Escape) return FALSE;
+    host_response(GTK_DIALOG(p->host_dialog), GTK_RESPONSE_CANCEL, p); return TRUE;
+}
+static void host_prepared(GObject *source, GAsyncResult *result, gpointer data) {
+    (void)source; TerminalPane *p = data; GError *error = NULL;
+    SshHostKeyReview *r = ssh_host_key_prepare_finish(result, &error);
+    if (!p->closed && p->host_dialog && g_task_get_cancellable(G_TASK(result)) == p->host_cancel) {
+        if (r) {
+            p->host_review = r; r = NULL;
+            char *text = g_strdup_printf("Session: %s\nHost: %s\n\nPreviously saved key(s):\n%s\n\nNew key: %s\n%s\n\nFile: %s\nBackup: %s\n\nA changed host key may mean the device was reset/replaced, or that you are connecting to a different device. Verify the new fingerprint using the device console or your administrator. This file is also used by other SSH applications.",
+                p->profile->name, p->host_review->endpoint, p->host_review->old_fingerprints,
+                p->host_review->algorithm, p->host_review->fingerprint, p->host_review->path, p->host_review->backup);
+            gtk_label_set_text(GTK_LABEL(p->host_detail), text); g_free(text);
+            gtk_widget_set_sensitive(p->host_verified, TRUE);
+            gtk_dialog_set_response_sensitive(GTK_DIALOG(p->host_dialog), 1, TRUE);
+        } else gtk_label_set_text(GTK_LABEL(p->host_detail), error->message);
+    }
+    g_clear_pointer(&r, ssh_host_key_unref); g_clear_error(&error); pane_unref(p);
+}
+static void review_host_clicked(GtkButton *button, gpointer data) {
+    (void)button; TerminalPane *p = data;
+    if (p->closed || !p->host_diagnostics || p->reconnect != RECONNECT_NONE) return;
+    if (p->host_dialog) { gtk_window_present(GTK_WINDOW(p->host_dialog)); return; }
+    GtkRoot *root = gtk_widget_get_root(p->root); if (!GTK_IS_WINDOW(root)) return;
+    p->host_cancel = g_cancellable_new();
+    p->host_dialog = gtk_dialog_new_with_buttons("SSH Host Key Changed", GTK_WINDOW(root), GTK_DIALOG_MODAL,
+        "Cancel", GTK_RESPONSE_CANCEL, "Copy Fingerprint", 1, "Replace Key & Reconnect", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_widget_add_css_class(p->host_dialog, "devterm-dialog");
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(p->host_dialog), TRUE);
+    gtk_dialog_set_default_response(GTK_DIALOG(p->host_dialog), GTK_RESPONSE_CANCEL);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(p->host_dialog), GTK_RESPONSE_ACCEPT, FALSE);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(p->host_dialog), 1, FALSE);
+    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(p->host_dialog));
+    gtk_widget_set_margin_start(box, 20); gtk_widget_set_margin_end(box, 20); gtk_widget_set_margin_top(box, 20); gtk_widget_set_margin_bottom(box, 20);
+    GtkWidget *scroll = gtk_scrolled_window_new(); gtk_widget_set_size_request(scroll, 620, 350);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    p->host_detail = gtk_label_new("Inspecting the SSH configuration and retrieving the candidate host key…");
+    gtk_label_set_wrap(GTK_LABEL(p->host_detail), TRUE); gtk_label_set_wrap_mode(GTK_LABEL(p->host_detail), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_max_width_chars(GTK_LABEL(p->host_detail), 78); gtk_label_set_selectable(GTK_LABEL(p->host_detail), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(p->host_detail), 0); gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), p->host_detail);
+    gtk_box_append(GTK_BOX(box), scroll);
+    p->host_verified = gtk_check_button_new_with_label("I verified this fingerprint using the device console or my administrator.");
+    gtk_widget_set_sensitive(p->host_verified, FALSE); gtk_box_append(GTK_BOX(box), p->host_verified);
+    g_signal_connect(p->host_verified, "toggled", G_CALLBACK(host_verified), p);
+    g_signal_connect(p->host_dialog, "response", G_CALLBACK(host_response), p);
+    g_signal_connect(p->host_dialog, "destroy", G_CALLBACK(host_dialog_destroyed), p);
+    GtkEventController *keys = gtk_event_controller_key_new(); gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+    g_signal_connect(keys, "key-pressed", G_CALLBACK(host_dialog_key), p); gtk_widget_add_controller(p->host_dialog, keys);
+    gtk_window_present(GTK_WINDOW(p->host_dialog));
+    gtk_widget_grab_focus(gtk_dialog_get_widget_for_response(GTK_DIALOG(p->host_dialog), GTK_RESPONSE_CANCEL));
+    ssh_host_key_prepare_async(p->profile, p->host_diagnostics, p->host_cancel, host_prepared, pane_ref(p));
+}
+void pane_set_reconnect_handler(TerminalPane *p, PaneEvent callback) { p->reconnect_requested = callback; }
 static void clear_reconnect(TerminalPane *p) {
     if (p->reconnect_idle) { g_source_remove(p->reconnect_idle); p->reconnect_idle = 0; }
     if (p->stop_timeout) { g_source_remove(p->stop_timeout); p->stop_timeout = 0; }
@@ -267,7 +401,7 @@ static void build_search(TerminalPane *p) {
     gtk_widget_add_controller(p->root, keys);
 }
 
-static void on_exit(VteTerminal *terminal, int status, gpointer data) {
+static void on_child_exit(VteTerminal *terminal, int status, gpointer data) {
     (void)terminal;
     TerminalPane *p = data;
     p->running = FALSE;
@@ -276,6 +410,7 @@ static void on_exit(VteTerminal *terminal, int status, gpointer data) {
     if (p->closed) return;
     if (p->reconnect == RECONNECT_STOPPING) { maybe_reconnect(p); return; }
     if (p->reconnect == RECONNECT_STARTING) clear_reconnect(p);
+    if (p->host_diagnostics) { pane_message(p, "SSH host key has changed. Review the fingerprint before reconnecting."); return; }
     char *message;
     const char *kind = p->profile ? "Session" : "Shell";
     if (WIFEXITED(status)) message = g_strdup_printf("%s exited (code %d). Output is retained; close the pane or reconnect.", kind, WEXITSTATUS(status));
@@ -321,11 +456,19 @@ static void spawn_session(TerminalPane *p, int fd) {
     char *directory = self ? g_path_get_dirname(self) : g_get_current_dir();
     char *helper = g_build_filename(directory, "devterm-connect", NULL);
     g_free(self); g_free(directory);
-    const char *argv[] = {helper, "--session", NULL}; int map_fd = 3;
+    host_notice_clear(p);
+    int sockets[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, sockets) != 0) {
+        close(fd); g_free(helper); clear_reconnect(p); pane_message(p, "Cannot create session status channel"); return;
+    }
+    p->host_socket = sockets[0];
+    p->host_watch = g_unix_fd_add_full(G_PRIORITY_DEFAULT, p->host_socket, G_IO_IN | G_IO_HUP | G_IO_ERR,
+                                     host_notice, pane_ref(p), (GDestroyNotify)pane_unref);
+    const char *argv[] = {helper, "--session", NULL}; int fds[] = {fd, sockets[1]}, maps[] = {3, 4};
     p->starting = TRUE;
-    /* VTE takes ownership of fd, including on spawn failure. */
+    /* VTE owns both passed descriptors, including on spawn failure. */
     vte_terminal_spawn_with_fds_async(p->terminal, VTE_PTY_DEFAULT, p->working_directory, argv, NULL,
-        &fd, 1, &map_fd, 1, G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, p->spawn_cancel, on_spawn, pane_ref(p));
+        fds, 2, maps, 2, G_SPAWN_DEFAULT, NULL, NULL, NULL, -1, p->spawn_cancel, on_spawn, pane_ref(p));
     g_free(helper);
 }
 static gboolean restart_session(gpointer data) {
@@ -366,7 +509,7 @@ static gboolean stop_timed_out(gpointer data) {
 
 static TerminalPane *pane_create(const char *working_directory, const SessionProfile *profile, const char *password, PaneEvent selected, PaneEvent status, gpointer user_data) {
     TerminalPane *p = g_new0(TerminalPane, 1);
-    p->reconnect_fd = -1;
+    p->reconnect_fd = -1; p->host_socket = -1;
     p->refs = 1;
     p->selected = selected;
     p->status = status;
@@ -388,6 +531,10 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     p->state = gtk_label_new("Selected"); gtk_widget_add_css_class(p->state, "pane-state");
     gtk_widget_set_visible(p->state, FALSE);
     gtk_box_append(GTK_BOX(header), p->label); gtk_box_append(GTK_BOX(header), p->state);
+    p->host_review_button = gtk_button_new_with_label("Review Host Key…");
+    gtk_widget_set_visible(p->host_review_button, FALSE);
+    g_signal_connect(p->host_review_button, "clicked", G_CALLBACK(review_host_clicked), p);
+    gtk_box_append(GTK_BOX(header), p->host_review_button);
     GtkGesture *click = gtk_gesture_click_new();
     g_signal_connect(click, "pressed", G_CALLBACK(on_label_click), p);
     gtk_widget_add_controller(header, GTK_EVENT_CONTROLLER(click));
@@ -426,7 +573,7 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     GtkEventController *focus = gtk_event_controller_focus_new();
     g_signal_connect(focus, "enter", G_CALLBACK(on_focus), p);
     gtk_widget_add_controller(p->root, focus);
-    g_signal_connect(p->terminal, "child-exited", G_CALLBACK(on_exit), p);
+    g_signal_connect(p->terminal, "child-exited", G_CALLBACK(on_child_exit), p);
     g_signal_connect(p->terminal, "map", G_CALLBACK(on_search_map), p);
 
     GSimpleActionGroup *actions = g_simple_action_group_new();
@@ -468,6 +615,7 @@ const SessionProfile *pane_session_profile(TerminalPane *p) { return p ? p->prof
 GCancellable *pane_prepare_reconnect(TerminalPane *p) {
     if (!p || p->closed || !p->profile) return NULL;
     if (p->reconnect != RECONNECT_NONE) { pane_message(p, "Reconnect already in progress for this pane"); return NULL; }
+    host_review_cancel(p);
     p->reconnect = RECONNECT_PASSWORD;
     p->reconnect_cancel = g_cancellable_new();
     vte_terminal_set_input_enabled(p->terminal, FALSE);
@@ -502,6 +650,7 @@ void pane_finish_reconnect_request(TerminalPane *p) {
 gboolean pane_is_reconnecting(TerminalPane *p) { return p && !p->closed && p->reconnect != RECONNECT_NONE; }
 void pane_disconnect(TerminalPane *p) {
     if (!p || p->closed || !p->profile) return;
+    host_review_cancel(p);
     cancel_reconnect(p);
     p->disconnecting = TRUE; g_cancellable_cancel(p->spawn_cancel);
     if (p->child > 0) kill(p->child, SIGHUP);
@@ -570,6 +719,7 @@ void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
 void pane_close(TerminalPane *p) {
     if (!p || p->closed) return;
     p->closed = TRUE;
+    host_notice_clear(p);
     cancel_reconnect(p);
     g_cancellable_cancel(p->spawn_cancel);
     search_cancel_timeout(p);

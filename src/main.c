@@ -40,6 +40,7 @@ struct App {
 };
 
 static void on_new(GtkButton *button, gpointer data);
+static void on_layout_reconnect(SplitLayout *layout, TerminalPane *pane, gpointer data);
 static void request_close_tab(TerminalTab *tab);
 static void on_draft_toggle(GtkToggleButton *button, gpointer data);
 static void sync_workspace(App *app) {
@@ -227,6 +228,7 @@ static void open_tab(App *app, const char *directory, const SessionProfile *prof
     tab->title = profile ? g_strdup(profile->name) : g_strdup_printf("Terminal %u", tab->id);
     tab->message = g_strdup(profile ? "Session starting. Authentication status appears in the pane." : "Terminal ready");
     tab->layout = profile ? split_layout_new_session(profile, password, on_tab_status, tab) : split_layout_new(directory, on_tab_status, tab);
+    split_layout_set_reconnect_handler(tab->layout, on_layout_reconnect);
     tab->draft = draft_new(split_layout_widget(tab->layout), tab->title, on_draft_visibility, tab);
     tab->page = draft_widget(tab->draft);
     gtk_widget_add_css_class(tab->page, "tab-page");
@@ -254,15 +256,24 @@ static void on_reconnect_request_done(gpointer data) {
     pane_finish_reconnect_request(data);
     pane_unref(data);
 }
+static void reconnect_pane(App *app, TerminalPane *pane) {
+    if (app->shutting_down) return;
+    const SessionProfile *profile = pane_session_profile(pane);
+    if (!profile) return;
+    GCancellable *cancel = pane_prepare_reconnect(pane);
+    if (cancel) session_manager_connect_to(app->sessions, profile, cancel,
+        on_reconnect_ready, pane_ref(pane), on_reconnect_request_done);
+}
+static void on_layout_reconnect(SplitLayout *layout, TerminalPane *pane, gpointer data) {
+    (void)layout; TerminalTab *tab = data; reconnect_pane(tab->app, pane);
+}
 static void on_current_session(gboolean reconnect, gpointer data) {
     App *app = data; if (app->shutting_down) return;
     TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
     const SessionProfile *profile = pane_session_profile(pane);
     if (!profile) { status(app, "Select a connected-session pane first"); return; }
     if (reconnect) {
-        GCancellable *cancel = pane_prepare_reconnect(pane);
-        if (cancel) session_manager_connect_to(app->sessions, profile, cancel,
-            on_reconnect_ready, pane_ref(pane), on_reconnect_request_done);
+        reconnect_pane(app, pane);
     } else {
         pane_disconnect(pane);
         status(app, "Disconnect requested; pane output is retained");

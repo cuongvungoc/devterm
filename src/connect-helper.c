@@ -3,6 +3,7 @@
 #include "devterm-version.h"
 #include "runtime.h"
 #include "login.h"
+#include "ssh-host-key.h"
 #include <gtk/gtk.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,6 +16,7 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -100,13 +102,14 @@ static int auth_listener(char **directory, char **path) {
     return fd;
 }
 static void arg(GPtrArray *args, const char *text) { g_ptr_array_add(args, g_strdup(text)); }
-static GPtrArray *client_args(SessionProfile *p, GError **error) {
+static GPtrArray *client_args(SessionProfile *p, const char *log_path, GError **error) {
     const char *name = p->type == SESSION_SSH ? "ssh" : p->type == SESSION_TELNET ? "telnet" : "picocom";
     char *program = g_find_program_in_path(name);
     if (!program) { g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Install %s to use this session type", name); return NULL; }
     GPtrArray *a = g_ptr_array_new_with_free_func(g_free); g_ptr_array_add(a, program);
     char *port = g_strdup_printf("%d", p->port);
     if (p->type == SESSION_SSH) {
+        arg(a, "-v"); arg(a, "-E"); arg(a, log_path);
         arg(a, "-tt"); arg(a, "-p"); arg(a, port); arg(a, "-l"); arg(a, p->username);
         const char *options[] = {"StrictHostKeyChecking=ask", "NumberOfPasswordPrompts=1", "ConnectionAttempts=1",
             "ControlPath=none", "ForwardAgent=no", "ServerAliveInterval=30", "ServerAliveCountMax=3", NULL};
@@ -135,6 +138,32 @@ static GPtrArray *client_args(SessionProfile *p, GError **error) {
     }
     g_free(port); g_ptr_array_add(a, NULL); return a;
 }
+/* -E separates OpenSSH diagnostics from remote stdout/stderr. Only failed
+ * pre-authentication host verification can create a review notice. */
+typedef struct { GString *line, *diagnostics; gboolean authenticated; } SshLog;
+static void ssh_log_line(SshLog *log) {
+    const char *line = log->line->str;
+    if (strstr(line, "Authenticated to ") || strstr(line, "Authentication succeeded")) log->authenticated = TRUE;
+    if (!log->authenticated && log->diagnostics->len + log->line->len < SSH_HOST_KEY_NOTICE_LIMIT)
+        g_string_append_len(log->diagnostics, line, log->line->len);
+    if (!g_str_has_prefix(line, "debug1:") && !g_str_has_prefix(line, "debug2:") &&
+        !g_str_has_prefix(line, "debug3:") && !g_str_has_prefix(line, "OpenSSH_") &&
+        !g_str_has_prefix(line, "Transferred:") && !g_str_has_prefix(line, "Bytes per second:") && !strstr(line, "Authenticated to ")) {
+        gsize length = log->line->len;
+        while (length && (line[length - 1] == '\n' || line[length - 1] == '\r')) length--;
+        write_all(1, line, length); write_all(1, "\r\n", 2);
+    }
+    g_string_truncate(log->line, 0);
+}
+static void ssh_log_read(int fd, SshLog *log) {
+    char bytes[4096]; ssize_t n;
+    while (fd >= 0 && (n = read(fd, bytes, sizeof bytes)) > 0) {
+        for (ssize_t i = 0; i < n; i++) {
+            g_string_append_c(log->line, bytes[i]);
+            if (bytes[i] == '\n' || log->line->len >= 16384) ssh_log_line(log);
+        }
+    }
+}
 int main(int argc, char **argv) {
     if (argc == 2 && g_str_equal(argv[1], "--version")) {
         g_print("DevTerm Connect %s\n", DEVTERM_VERSION);
@@ -150,10 +179,21 @@ int main(int argc, char **argv) {
     GError *error = NULL; char *secret = NULL;
     SessionProfile *p = session_read_launch(3, &secret, &error); close(3);
     if (!p) { message(error->message); g_error_free(error); return 1; }
-    GPtrArray *args = client_args(p, &error);
-    if (!args) { message(error->message); g_error_free(error); session_secret_free(secret); session_profile_free(p); return 1; }
-    char *auth_dir = NULL, *auth_path = NULL;
-    int listener = -1;
+    GPtrArray *args = NULL; int result = 1;
+    char *auth_dir = NULL, *auth_path = NULL, *log_dir = NULL, *log_path = NULL;
+    int listener = -1, ssh_log_fd = -1;
+    if (p->type == SESSION_SSH) {
+        /* OpenSSH closes inherited descriptors before opening -E. A private
+         * FIFO keeps client diagnostics separate without a log on disk. */
+        log_dir = g_build_filename(g_get_user_runtime_dir(), "devterm-ssh-XXXXXX", NULL);
+        if (g_mkdtemp(log_dir)) {
+            log_path = g_build_filename(log_dir, "diagnostics", NULL);
+            if (mkfifo(log_path, 0600) == 0) ssh_log_fd = open(log_path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+        }
+        if (ssh_log_fd < 0) { message("Cannot create private SSH diagnostic channel"); goto cleanup; }
+    }
+    args = client_args(p, log_path, &error);
+    if (!args) { message(error->message); g_clear_error(&error); goto cleanup; }
     if (p->type == SESSION_SSH && p->password_auth) {
         listener = auth_listener(&auth_dir, &auth_path);
         if (listener < 0) { message("Cannot create private SSH authentication channel"); goto cleanup; }
@@ -167,6 +207,7 @@ int main(int argc, char **argv) {
     int master; pid_t child = forkpty(&master, NULL, NULL, &dimensions);
     if (child == 0) {
         pid_t helper = getppid(); prctl(PR_SET_PDEATHSIG, SIGHUP); if (getppid() != helper) _exit(1);
+        close(4); /* The remote client must never inherit the pane control channel. */
         execv(args->pdata[0], (char **)args->pdata); _exit(127);
     }
     if (child < 0) { message("Cannot create session PTY"); if (have_termios) tcsetattr(0, TCSANOW, &original); goto cleanup; }
@@ -176,6 +217,7 @@ int main(int argc, char **argv) {
     gboolean authenticating = p->type != SESSION_SSH && p->auto_login;
     LoginMachine *login = authenticating ? login_machine_new(p) : NULL;
     GString *diagnostics = g_string_new(NULL);
+    SshLog log = {g_string_new(NULL), g_string_new(NULL), FALSE};
     gboolean password_submitted = FALSE;
     GByteArray *pending = g_byte_array_new();
     if (authenticating) message("Automatic login in progress; typed input and Quick Commands are ignored until ready. Esc/Ctrl+C cancels. Authentication output is hidden.");
@@ -186,9 +228,13 @@ int main(int argc, char **argv) {
         if (!ended) ended = waitpid(child, &status, WNOHANG) == child;
         if (resizing) { ioctl(0, TIOCGWINSZ, &dimensions); ioctl(master, TIOCSWINSZ, &dimensions); resizing = 0; }
         if (authenticating && g_get_monotonic_time() > deadline) { message("Automatic login timed out. Connection stopped; check profile prompts and credentials."); failed = TRUE; break; }
-        struct pollfd fds[] = {{master, POLLIN | (pending->len ? POLLOUT : 0), 0}, {0, pending->len < 65536 ? POLLIN : 0, 0}, {listener, POLLIN, 0}};
-        int n = poll(fds, 3, 100); if (n < 0 && errno == EINTR) continue; if (n < 0) break;
-        if (fds[2].revents & POLLIN) serve_password(listener, child, &secret);
+        struct pollfd fds[] = {{master, POLLIN | (pending->len ? POLLOUT : 0), 0}, {0, pending->len < 65536 ? POLLIN : 0, 0}, {listener, POLLIN, 0}, {ssh_log_fd, POLLIN, 0}};
+        int n = poll(fds, 4, 100); if (n < 0 && errno == EINTR) continue; if (n < 0) break;
+        if (fds[3].revents & (POLLIN | POLLHUP)) ssh_log_read(ssh_log_fd, &log);
+        if (fds[2].revents & POLLIN) {
+            serve_password(listener, child, &secret);
+            if (!secret) log.authenticated = TRUE;
+        }
         if (fds[0].revents & POLLOUT) {
             ssize_t sent = write(master, pending->data, pending->len);
             if (sent > 0) {
@@ -241,20 +287,27 @@ int main(int argc, char **argv) {
         while (waitpid(child, &status, WNOHANG) == 0 && g_get_monotonic_time() < end) g_usleep(10000);
         kill(-child, SIGKILL); while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
     }
+    ssh_log_read(ssh_log_fd, &log);
+    if (log.line->len) ssh_log_line(&log);
+    if (p->type == SESSION_SSH && !stopping && !log.authenticated && WIFEXITED(status) && WEXITSTATUS(status) == 255 &&
+        strstr(log.diagnostics->str, "REMOTE HOST IDENTIFICATION HAS CHANGED!") &&
+        strstr(log.diagnostics->str, "Host key verification failed.")) {
+        char *notice = g_strconcat(SSH_HOST_KEY_NOTICE, log.diagnostics->str, NULL);
+        send(4, notice, strlen(notice), MSG_DONTWAIT | MSG_NOSIGNAL); g_free(notice);
+    }
+    g_string_free(log.line, TRUE); g_string_free(log.diagnostics, TRUE);
     if (have_termios) tcsetattr(0, TCSANOW, &original);
     login_machine_free(login); if (pending->len) explicit_bzero(pending->data, pending->len); g_byte_array_unref(pending);
     explicit_bzero(diagnostics->str, diagnostics->allocated_len); g_string_free(diagnostics, TRUE);
-    if (!failed && !stopping && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-        session_secret_free(secret); session_profile_free(p); g_ptr_array_unref(args);
-        if (listener >= 0) close(listener);
-        if (auth_path) g_unlink(auth_path);
-        if (auth_dir) g_rmdir(auth_dir);
-        g_free(auth_path); g_free(auth_dir); return 0;
-    }
+    if (!failed && !stopping && WIFEXITED(status) && WEXITSTATUS(status) == 0) result = 0;
 cleanup:
-    session_secret_free(secret); session_profile_free(p); g_ptr_array_unref(args);
+    session_secret_free(secret); session_profile_free(p); g_clear_pointer(&args, g_ptr_array_unref);
     if (listener >= 0) close(listener);
     if (auth_path) g_unlink(auth_path);
     if (auth_dir) g_rmdir(auth_dir);
-    g_free(auth_path); g_free(auth_dir); return 1;
+    g_free(auth_path); g_free(auth_dir);
+    if (ssh_log_fd >= 0) close(ssh_log_fd);
+    if (log_path) g_unlink(log_path);
+    if (log_dir) g_rmdir(log_dir);
+    g_free(log_path); g_free(log_dir); return result;
 }

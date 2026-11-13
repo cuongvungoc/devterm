@@ -12,6 +12,8 @@ TerminalPane *pane_ref(TerminalPane *pane);
 void pane_unref(TerminalPane *pane);
 const SessionProfile *pane_session_profile(TerminalPane *pane);
 void pane_disconnect(TerminalPane *pane);
+/* Requested for this exact pane after explicit host-key replacement. */
+void pane_set_reconnect_handler(TerminalPane *pane, PaneEvent callback);
 /* Prepare locks this pane as the reconnect target without stopping its child.
  * NULL means unavailable/busy; returned cancellable is borrowed. The credential
  * request must hold a pane_ref and call pane_finish_reconnect_request on release. */

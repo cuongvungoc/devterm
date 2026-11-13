@@ -31,7 +31,7 @@ def profile(kind=1):
                 password_auth=True, remember=False, auto_login=kind != 0, send_initial_enter=False)
 
 class Connection:
-    def __init__(self, settings, password=PASSWORD, env=None):
+    def __init__(self, settings, password=PASSWORD, env=None, control=False):
         # CI/container builds have no parent terminal. The SSH fixture's line
         # editor needs the same terminal type that VTE supplies in the app.
         env = dict(os.environ if env is None else env)
@@ -39,13 +39,21 @@ class Connection:
         config = json.dumps(settings).encode(); secret = password.encode() if password else b''
         fd = os.memfd_create('devterm-test', os.MFD_CLOEXEC)
         os.write(fd, struct.pack('>II', len(config), len(secret)) + config + secret); os.lseek(fd, 0, 0)
+        self.control = None
+        channel = None
+        if control:
+            self.control, channel = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            self.control.settimeout(1)
         self.master, slave = pty.openpty()
         def setup():
             os.dup2(fd, 3)
-            if fd != 3: os.close(fd)
+            if channel is not None: os.dup2(channel.fileno(), 4)
+            if fd not in (3, 4): os.close(fd)
             os.setsid(); fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        inherited = tuple(set((fd, 3) + ((channel.fileno(), 4) if channel is not None else ())))
         self.process = subprocess.Popen([HELPER, '--session'], stdin=slave, stdout=slave, stderr=slave,
-                                        pass_fds=tuple(set((fd, 3))), preexec_fn=setup, env=env)
+                                        pass_fds=inherited, preexec_fn=setup, env=env)
+        if channel is not None: channel.close()
         os.close(slave); os.close(fd); self.output = bytearray()
     def read(self, timeout=.1):
         if select.select([self.master], [], [], timeout)[0]:
@@ -72,6 +80,7 @@ class Connection:
             try: self.finish(3)
             except subprocess.TimeoutExpired: self.process.kill(); self.process.wait()
         os.close(self.master)
+        if self.control is not None: self.control.close()
 
 class Device:
     def __init__(self, serial=False, reject=False, unknown=False, wait_enter=False):
@@ -202,11 +211,15 @@ class SSHConnections(unittest.TestCase):
         self.path = Path(self.root.name); self.auth = []; self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True); self.thread.start()
         self.key = asyncssh.generate_private_key('ssh-ed25519')
+        client_key = asyncssh.generate_private_key('ssh-ed25519'); self.identity = self.path/'client-key'
+        client_key.write_private_key(str(self.identity)); self.identity.chmod(0o600)
         auth = self.auth; self.auth_gate = threading.Event(); self.auth_gate.set(); auth_gate = self.auth_gate
         class Server(asyncssh.SSHServer):
             async def begin_auth(self, username):
                 while not auth_gate.is_set(): await asyncio.sleep(.01)
                 return True
+            def public_key_auth_supported(self): return True
+            def validate_public_key(self, username, key): return username == 'tester' and key.public_data == client_key.public_data
             def password_auth_supported(self): return True
             def validate_password(self, username, password): auth.append((username, password)); return username == 'tester' and password == PASSWORD
         async def shell(process):
@@ -217,6 +230,9 @@ class SSHConnections(unittest.TestCase):
                 if not line: break
                 line = line.strip()
                 if line == 'exit': process.exit(0); return
+                if line == 'spoof-host-key':
+                    process.stderr.write('WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\r\nHost key verification failed.\r\n')
+                    process.exit(255); return
                 if line == 'size':
                     width, height, _, _ = process.get_terminal_size(); process.stdout.write(f'SIZE:{width}x{height}\r\n')
                 else: process.stdout.write('SSH_RESULT:' + line + '\r\n')
@@ -233,9 +249,10 @@ class SSHConnections(unittest.TestCase):
     def stop_server(self):
         async def stop(): self.server.close(); await self.server.wait_closed()
         asyncio.run_coroutine_threadsafe(stop(), self.loop).result(5); self.loop.call_soon_threadsafe(self.loop.stop); self.thread.join(2); self.loop.close()
-    def connection(self, password=PASSWORD):
-        settings = profile(0); settings['port'] = self.port
-        conn = Connection(settings, password, self.env); self.addCleanup(conn.close); return conn
+    def connection(self, password=PASSWORD, control=False, password_auth=True):
+        settings = profile(0); settings['port'] = self.port; settings['password_auth'] = password_auth
+        if not password_auth: settings['identity'] = str(self.identity)
+        conn = Connection(settings, password, self.env, control=control); self.addCleanup(conn.close); return conn
     def test_password_authentication_and_resize(self):
         conn = self.connection(); conn.until(b'SSH_READY')
         self.assertEqual(self.auth, [('tester', PASSWORD)]); self.assertNotIn(PASSWORD.encode(), conn.output)
@@ -250,6 +267,25 @@ class SSHConnections(unittest.TestCase):
         self.write_known(asyncssh.generate_private_key('ssh-ed25519')); before = self.known.read_bytes()
         conn = self.connection(); self.assertNotEqual(conn.finish(), 0); self.assertFalse(self.auth)
         self.assertIn(b'HOST IDENTIFICATION HAS CHANGED', conn.output); self.assertEqual(self.known.read_bytes(), before)
+    def test_changed_key_control_notice_password_and_key_mode(self):
+        self.write_known(asyncssh.generate_private_key('ssh-ed25519')); before = self.known.read_bytes()
+        for password_auth in (True, False):
+            conn = self.connection(control=True, password_auth=password_auth)
+            self.assertNotEqual(conn.finish(), 0); self.assertFalse(self.auth)
+            notice = conn.control.recv(65536)
+            self.assertTrue(notice.startswith(b'DEVTERM-HOST-KEY-CHANGED-1\n'))
+            self.assertIn(self.key.get_fingerprint().encode(), notice)
+            self.assertEqual(self.known.read_bytes(), before)
+    def test_remote_output_cannot_offer_host_key_replacement(self):
+        before = self.known.read_bytes(); conn = self.connection(control=True); conn.until(b'SSH_READY')
+        conn.send('spoof-host-key\r'); self.assertNotEqual(conn.finish(), 0)
+        self.assertIn(b'HOST IDENTIFICATION HAS CHANGED', conn.output)
+        self.assertEqual(conn.control.recv(65536), b''); self.assertEqual(self.known.read_bytes(), before)
+    def test_key_auth_remote_output_cannot_offer_replacement(self):
+        before = self.known.read_bytes(); conn = self.connection(control=True, password_auth=False)
+        conn.until(b'SSH_READY'); conn.send('spoof-host-key\r'); self.assertNotEqual(conn.finish(), 0)
+        self.assertIn(b'HOST IDENTIFICATION HAS CHANGED', conn.output)
+        self.assertEqual(conn.control.recv(65536), b''); self.assertEqual(self.known.read_bytes(), before)
     def test_private_password_socket_rejects_unrelated_process(self):
         self.auth_gate.clear(); conn = self.connection()
         end = time.monotonic() + 5; paths = []
