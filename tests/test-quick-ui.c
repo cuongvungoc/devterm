@@ -31,7 +31,14 @@ static GtkWidget *find(GtkWidget *w, GType type, const char *label) {
     return NULL;
 }
 static GtkWidget *field(GtkWidget *dialog, const char *name) {
-    GtkWidget *label = find(dialog, GTK_TYPE_LABEL, name); g_assert_nonnull(label); return gtk_widget_get_next_sibling(label);
+    if (GTK_IS_LABEL(dialog) && g_strcmp0(gtk_label_get_text(GTK_LABEL(dialog)), name) == 0) {
+        GtkWidget *next = gtk_widget_get_next_sibling(dialog);
+        if (next && GTK_IS_EDITABLE(next)) return next;
+    }
+    for (GtkWidget *c = gtk_widget_get_first_child(dialog); c; c = gtk_widget_get_next_sibling(c)) {
+        GtkWidget *result = field(c, name); if (result) return result;
+    }
+    return NULL;
 }
 static GtkWidget *quick_button(const char *id) {
     for (GtkWidget *c = gtk_widget_get_first_child(bar); c; c = gtk_widget_get_next_sibling(c)) {
@@ -47,6 +54,7 @@ static GPtrArray *load(void) { GError *error = NULL; GPtrArray *items = commands
 static void run(const QuickCommand *command, gpointer data) { (void)command; (void)data; runs++; }
 static void report(gpointer data, const char *message) { (void)data; g_free(last_status); last_status = g_strdup(message); }
 static void fixture(guint n) {
+    g_remove(path); /* Explicitly reset even the malformed-file fixture. */
     GPtrArray *items = g_ptr_array_new_with_free_func(quick_command_free);
     for (guint i = 0; i < n; i++) {
         char *id = g_strdup_printf("id-%u", i), *name = g_strdup_printf("Command %02u", i);
@@ -171,6 +179,66 @@ static void test_drag_payload(void) {
     g_clear_error(&error); g_value_unset(&value); gdk_content_formats_unref(formats); g_object_unref(provider);
     close_ui();
 }
+/* Use the actual editor widgets, preserving row identity across movement. */
+static GtkWidget *step_rows(GtkWidget *dialog) {
+    if (GTK_IS_ENTRY(dialog) && g_strcmp0(gtk_entry_get_placeholder_text(GTK_ENTRY(dialog)), "One command line") == 0)
+        return gtk_widget_get_parent(gtk_widget_get_parent(dialog));
+    for (GtkWidget *c = gtk_widget_get_first_child(dialog); c; c = gtk_widget_get_next_sibling(c)) {
+        GtkWidget *result = step_rows(c); if (result) return result;
+    }
+    return NULL;
+}
+static GtkWidget *step_at(GtkWidget *dialog, guint index) {
+    GtkWidget *w = gtk_widget_get_first_child(step_rows(dialog));
+    while (index-- && w) w = gtk_widget_get_next_sibling(w);
+    g_assert_nonnull(w); return w;
+}
+static GtkWidget *step_button_named(GtkWidget *row, const char *tooltip) {
+    for (GtkWidget *c = gtk_widget_get_first_child(row); c; c = gtk_widget_get_next_sibling(c))
+        if (GTK_IS_BUTTON(c) && g_strcmp0(gtk_widget_get_tooltip_text(c), tooltip) == 0) return c;
+    return NULL;
+}
+static void set_step(GtkWidget *row, const char *text, guint delay) {
+    gtk_editable_set_text(GTK_EDITABLE(find(row, GTK_TYPE_ENTRY, NULL)), text);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(find(row, GTK_TYPE_SPIN_BUTTON, NULL)), delay);
+}
+static void test_sequence_editor(void) {
+    fixture(1); open_ui(); guint before = runs; click(add); GtkWidget *d = top("Add Command");
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(find(d, GTK_TYPE_DROP_DOWN, NULL)), QUICK_SEQUENCE);
+    gtk_editable_set_text(GTK_EDITABLE(field(d, "Name")), "Deploy 日本語");
+    gtk_dialog_response(GTK_DIALOG(d), GTK_RESPONSE_ACCEPT); g_assert_nonnull(top("Add Command"));
+    set_step(step_at(d, 0), "cd '/tmp/Đường'", 375);
+    click(find(d, GTK_TYPE_BUTTON, "Add Command Step")); set_step(step_at(d, 1), "printf 'a|b' | cat", 1200);
+    click(find(d, GTK_TYPE_BUTTON, "Add Command Step")); set_step(step_at(d, 2), "pwd", 60000);
+    GtkWidget *first = step_at(d, 0), *second = step_at(d, 1), *third = step_at(d, 2);
+    g_assert_false(gtk_widget_get_sensitive(step_button_named(first, "Move step up")));
+    g_assert_false(gtk_widget_get_sensitive(step_button_named(third, "Move step down")));
+    click(step_button_named(second, "Move step up")); g_assert_true(step_at(d, 0) == second);
+    click(step_button_named(second, "Move step down")); g_assert_true(step_at(d, 0) == first);
+    click(step_button_named(first, "Move step down"));
+    click(step_button_named(third, "Remove step"));
+    g_assert_true(step_at(d, 0) == second); g_assert_true(step_at(d, 1) == first);
+    GtkWidget *stack = gtk_widget_get_parent(gtk_widget_get_parent(find(first, GTK_TYPE_SPIN_BUTTON, NULL)));
+    g_assert_cmpstr(gtk_stack_get_visible_child_name(GTK_STACK(stack)), ==, "last");
+    gtk_dialog_response(GTK_DIALOG(d), GTK_RESPONSE_ACCEPT); settle(); g_assert_null(top("Add Command"));
+    GPtrArray *items = load(); g_assert_cmpuint(items->len, ==, 2); QuickCommand *seq = items->pdata[1];
+    g_assert_cmpint(seq->kind, ==, QUICK_SEQUENCE); g_assert_cmpuint(seq->steps->len, ==, 2);
+    QuickCommandStep *a = seq->steps->pdata[0], *b = seq->steps->pdata[1];
+    g_assert_cmpstr(a->command, ==, "printf 'a|b' | cat"); g_assert_cmpuint(a->delay_ms, ==, 1200);
+    g_assert_cmpstr(b->command, ==, "cd '/tmp/Đường'"); g_assert_cmpuint(b->delay_ms, ==, 0);
+    char *id = g_strdup(seq->id); g_ptr_array_unref(items);
+    g_assert_nonnull(strstr(gtk_widget_get_tooltip_text(quick_button(id)), "delay 1200 ms"));
+    action("quick.edit", id); d = top("Edit Command");
+    g_assert_cmpuint(gtk_drop_down_get_selected(GTK_DROP_DOWN(find(d, GTK_TYPE_DROP_DOWN, NULL))), ==, QUICK_SEQUENCE);
+    set_step(step_at(d, 0), "cancelled edit", 99); gtk_dialog_response(GTK_DIALOG(d), GTK_RESPONSE_CANCEL);
+    items = load(); seq = items->pdata[1]; g_assert_cmpstr(((QuickCommandStep *)seq->steps->pdata[0])->command, ==, "printf 'a|b' | cat"); g_ptr_array_unref(items);
+    action("quick.edit", id); d = top("Edit Command");
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(find(d, GTK_TYPE_DROP_DOWN, NULL)), QUICK_COMMAND);
+    gtk_editable_set_text(GTK_EDITABLE(field(d, "Command")), "echo converted");
+    gtk_dialog_response(GTK_DIALOG(d), GTK_RESPONSE_ACCEPT); settle(); items = load(); seq = items->pdata[1];
+    g_assert_cmpstr(seq->id, ==, id); g_assert_cmpint(seq->kind, ==, QUICK_COMMAND); g_assert_cmpstr(seq->command, ==, "echo converted");
+    g_ptr_array_unref(items); g_free(id); g_assert_cmpuint(runs, ==, before); close_ui();
+}
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL); root = g_dir_make_tmp("devterm-quick-ui-XXXXXX", NULL);
     g_setenv("XDG_CONFIG_HOME", root, TRUE); path = commands_config_path(); if (!gtk_init_check()) return 77;
@@ -180,5 +248,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/quick-ui/empty-invalid", test_empty_and_invalid);
     g_test_add_func("/quick-ui/close-pending", test_close_pending);
     g_test_add_func("/quick-ui/drag-payload", test_drag_payload);
+    g_test_add_func("/quick-ui/sequence-editor", test_sequence_editor);
     int result = g_test_run(); g_remove(path); char *dir = g_path_get_dirname(path); g_rmdir(dir); g_free(dir); g_rmdir(root); g_free(root); g_free(path); return result;
 }

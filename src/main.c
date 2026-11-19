@@ -9,6 +9,7 @@
 #include "devterm-version.h"
 #include "runtime.h"
 #include "shortcuts-ui.h"
+#include "command-sequence.h"
 #include <gtk/gtk.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -37,6 +38,7 @@ struct App {
     gboolean shutting_down;
     TabStrip *tab_strip;
     QuickCommandsUI *quick_commands;
+    CommandSequences *sequences;
     SessionManager *sessions;
     ShortcutSettings *shortcuts; /* Application-owned. */
     GHashTable *pressed_shortcuts;
@@ -435,8 +437,11 @@ static void on_quick_command(const QuickCommand *item, gpointer data) {
         status(app, pane_is_reconnecting(active) ? "Wait for reconnect to finish before sending Quick Commands." :
             "Selected pane has no running session. Reconnect it or create a new terminal."); return;
     }
-    pane_send(active, item->command, item->send_enter);
-    status(app, item->send_enter ? "Command sent to selected pane" : "Command inserted in selected pane");
+    GError *error = NULL;
+    if (!command_sequences_send(app->sequences, active, item, &error)) {
+        status(app, error->message); g_clear_error(&error); return;
+    }
+    if (item->kind == QUICK_COMMAND) status(app, item->send_enter ? "Command sent to selected pane" : "Command inserted in selected pane");
 }
 static void show_shortcuts(App *app) { shortcut_settings_show(app->shortcuts, GTK_WINDOW(app->window)); }
 static void action_workspace(GSimpleAction *action, GVariant *parameter, gpointer data) {
@@ -534,6 +539,7 @@ static void on_window_destroy(GtkWidget *window, gpointer data) {
     App *app = data;
     if (app->shutting_down) return;
     app->shutting_down = TRUE;
+    g_clear_pointer(&app->sequences, command_sequences_free);
     g_clear_pointer(&app->tab_strip, tab_strip_free);
     g_clear_pointer(&app->quick_commands, quick_commands_ui_free);
     GtkWidget *dialog = g_steal_pointer(&app->window_close_dialog);
@@ -596,12 +602,14 @@ static void app_free(gpointer data) {
     g_clear_object(&app->export_cancel);
     g_clear_pointer(&app->sessions, session_manager_free);
     g_clear_pointer(&app->pressed_shortcuts, g_hash_table_unref);
+    g_clear_pointer(&app->sequences, command_sequences_free);
     g_free(app);
 }
 static void activate(GtkApplication *application, gpointer data) {
     (void)data;
     App *app = g_new0(App, 1);
     app->tabs = g_ptr_array_new_with_free_func(tab_free);
+    app->sequences = command_sequences_new();
     app->pressed_shortcuts = g_hash_table_new(g_direct_hash, g_direct_equal);
     app->shortcuts = shortcut_settings_get(application);
     app->window = gtk_application_window_new(application);

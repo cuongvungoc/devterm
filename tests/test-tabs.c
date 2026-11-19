@@ -121,6 +121,33 @@ static void test_pending_rename(void) {
     on_new(NULL, app); settle(); action(app, app->active_tab->id, "tab.rename");
     destroy_app(app); g_assert_null(dialog("Rename Tab"));
 }
+static char *pane_text(TerminalPane *pane) {
+    GBytes *snapshot = pane_snapshot_text(pane, NULL); g_assert_nonnull(snapshot);
+    gsize length; const char *bytes = g_bytes_get_data(snapshot, &length);
+    char *text = length ? g_strndup(bytes, length) : g_strdup(""); g_bytes_unref(snapshot); return text;
+}
+static void test_sequence_tab_target(void) {
+    App *app = present(); TerminalPane *target = split_layout_active(app->active_tab->layout);
+    gint64 end = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (!pane_is_running(target) && g_get_monotonic_time() < end) settle();
+    g_assert_true(pane_is_running(target));
+    QuickCommand *cmd = quick_sequence_new("tabs-sequence", "Tab target");
+    g_ptr_array_add(cmd->steps, quick_command_step_new("printf 'SEQ-FIRST\\n'", 900));
+    g_ptr_array_add(cmd->steps, quick_command_step_new("printf 'SEQ-LAST\\n'", 0));
+    on_quick_command(cmd, app); g_assert_true(command_sequences_busy(app->sequences, target));
+    on_new(NULL, app); settle(); TerminalTab *other = app->active_tab;
+    draft_set_visible(other->draft, TRUE); draft_focus(other->draft); settle();
+    GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(app->window));
+    end = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (command_sequences_busy(app->sequences, target) && g_get_monotonic_time() < end) settle();
+    g_assert_false(command_sequences_busy(app->sequences, target)); settle();
+    g_assert_true(app->active_tab == other); g_assert_true(gtk_window_get_focus(GTK_WINDOW(app->window)) == focus);
+    char *text = pane_text(target); g_assert_nonnull(strstr(text, "SEQ-LAST")); g_free(text);
+    text = pane_text(split_layout_active(other->layout)); g_assert_null(strstr(text, "SEQ-FIRST")); g_assert_null(strstr(text, "SEQ-LAST")); g_free(text);
+    /* Closing the application also cancels a pending sequence before tab free. */
+    on_quick_command(cmd, app); g_assert_true(command_sequences_busy(app->sequences, split_layout_active(other->layout)));
+    quick_command_free(cmd); destroy_app(app);
+}
 int main(int argc, char **argv) {
     char *config = g_dir_make_tmp("devterm-tabs-XXXXXX", NULL); g_assert_nonnull(config);
     g_setenv("XDG_CONFIG_HOME", config, TRUE);
@@ -133,5 +160,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/tabs/order-preserves-state", test_order_and_state);
     g_test_add_func("/tabs/close-confirmation", test_close_confirmation);
     g_test_add_func("/tabs/pending-rename-close", test_pending_rename);
+    g_test_add_func("/tabs/sequence-tab-target", test_sequence_tab_target);
     int result = g_test_run(); g_object_unref(application); g_rmdir(config); g_free(config); return result;
 }

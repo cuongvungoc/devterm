@@ -11,6 +11,7 @@ SRS trả lời **DevTerm phải làm gì**; SDD giải thích **source hiện t
 
 Thông tin vận hành liên quan:
 
+- [Kiểm thử Sequence](SEQUENCES-TESTING.md): các ca mới và kết quả hồi quy cho chuỗi lệnh từng hàng.
 - [README ứng dụng](../README.md): cài dependency, build, chạy và sử dụng.
 - [Đóng gói `.deb`](../packaging/README.md): build bằng Docker, dependency và runtime riêng.
 - [Linux Mint](../packaging/MINT.md): biến thể Mint 22.1 Xia amd64.

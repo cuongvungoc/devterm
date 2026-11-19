@@ -1,6 +1,7 @@
 #include "../src/split-layout.h"
 #include "../src/sessions-ui.h"
 #include "../src/draft.h"
+#include "../src/command-sequence.h"
 #include <glib/gstdio.h>
 #include <string.h>
 
@@ -227,6 +228,31 @@ static void test_early_reconnect_close(void) {
     }
     wait_clients_closed(); session_profile_free(p);
 }
+static void test_sequence_session_lifetime(void) {
+    SessionProfile *profile_data = profile(SESSION_SSH, TRUE); TerminalPane *p = new_pane(profile_data);
+    SessionManager *m = manager(); CommandSequences *runs = command_sequences_new();
+    QuickCommand *cmd = quick_sequence_new("test-seq", "Reconnect cancellation");
+    g_ptr_array_add(cmd->steps, quick_command_step_new("before-change", 700));
+    g_ptr_array_add(cmd->steps, quick_command_step_new("FORBIDDEN-AFTER-CHANGE", 0));
+    g_assert_true(command_sequences_send(runs, p, cmd, NULL)); request(m, p);
+    g_assert_false(command_sequences_busy(runs, p));
+    gtk_dialog_response(GTK_DIALOG(password_dialog()), GTK_RESPONSE_CANCEL); settle();
+    g_assert_true(pane_is_running(p));
+    gint64 end = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
+    while (g_get_monotonic_time() < end) iterate();
+    char *text = snapshot(p); g_assert_nonnull(strstr(text, "RECEIVED:before-change"));
+    g_assert_null(strstr(text, "FORBIDDEN-AFTER-CHANGE")); g_free(text);
+    /* An explicit new run works after Cancel, and disconnect cancels it. */
+    g_assert_true(command_sequences_send(runs, p, cmd, NULL)); pane_disconnect(p);
+    g_assert_false(command_sequences_busy(runs, p)); wait_stopped(p);
+    reconnect(p); wait_ready(p, 2);
+    g_assert_true(command_sequences_send(runs, p, cmd, NULL)); reconnect(p);
+    g_assert_false(command_sequences_busy(runs, p)); wait_ready(p, 3);
+    end = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
+    while (g_get_monotonic_time() < end) iterate();
+    text = snapshot(p); g_assert_null(strstr(text, "FORBIDDEN-AFTER-CHANGE")); g_free(text);
+    quick_command_free(cmd); command_sequences_free(runs); session_manager_free(m); close_pane(p); session_profile_free(profile_data);
+}
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL); root = g_dir_make_tmp("devterm-reconnect-XXXXXX", NULL);
     trace_path = g_build_filename(root, "trace", NULL);
@@ -260,6 +286,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/reconnect/close-pending", test_close_pending);
     g_test_add_func("/reconnect/fail-retry", test_fail_and_retry);
     g_test_add_func("/reconnect/early-close", test_early_reconnect_close);
+    g_test_add_func("/reconnect/sequence-session-lifetime", test_sequence_session_lifetime);
     int result = g_test_run(); gtk_window_destroy(window);
     g_assert_cmpuint(unexpected_tabs, ==, 0);
     const char *files[] = {"ssh", "telnet", "picocom", "trace", "lock"};

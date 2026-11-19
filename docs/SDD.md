@@ -9,6 +9,8 @@
 | Đặc tả liên quan | [SRS.md](SRS.md) |
 | Phạm vi | Thiết kế đang triển khai trong repository; không phải thiết kế cho các tính năng tương lai |
 
+> Cập nhật 19/11/2026: Quick Commands có Sequence, timer gắn với vòng đời session và schema v2. Các phần không liên quan giữ baseline nêu trên.
+
 ## Mục lục
 
 1. [Mục tiêu và nguyên tắc thiết kế](#1-mục-tiêu-và-nguyên-tắc-thiết-kế)
@@ -103,6 +105,7 @@ Các cặp `.c/.h` dùng header công khai cho phần giao tiếp; state nội b
 | [tab-strip.c](../src/tab-strip.c) | Nhãn/menu tab, rename, reorder, drag cancel, xử lý focus | Callback theo tab ID; không sở hữu PTY/layout của tab |
 | [commands.c](../src/commands.c) | Model QuickCommand, XDG path, JSON load/save | Giữ thứ tự, validation khi load, atomic save |
 | [quick-commands-ui.c](../src/quick-commands-ui.c) | Toolbar/Manage, CRUD, confirm delete, reorder và persistence UI | Dispatch command qua callback; lưu thành công mới chấp nhận thay đổi |
+| [command-sequence.c](../src/command-sequence.c) | Snapshot định nghĩa, timer gửi và khóa một lượt/pane | Giữ pane/session đích; hủy timer và references khi session đổi hoặc shutdown |
 | [draft.c](../src/draft.c) | Editor theo tab, chia chiều cao, Copy/Clear/Undo và focus | Bao terminal layout trong GtkPaned; không giao tiếp child |
 | [confirm-dialog.c](../src/confirm-dialog.c) | Hộp thoại xác nhận dùng chung, mặc định Cancel | Callback kết quả và destroy notifier cho context |
 | [text-export.c](../src/text-export.c) | Ghi snapshot bất đồng bộ ra file local | `text_export_async/finish`; giữ `GBytes` đến khi hoàn tất |
@@ -237,7 +240,7 @@ Signal `page-reordered` cập nhật mảng `App.tabs` theo thứ tự notebook 
 
 ### 6.1. Model, UI và gửi input
 
-`QuickCommand` gồm `id`, `name`, `command`, `send_enter`. `commands.c` đọc/ghi model; `QuickCommandsUI` quản lý toolbar dạng FlowBox, vùng cuộn, editor, menu và Manage. Main nhận callback dispatch để giải quyết active pane.
+`QuickCommand` gồm `id`, `name`, `kind`; Command giữ `command`, `send_enter`; Sequence sở hữu `GPtrArray<QuickCommandStep>` với command và delay sau mỗi hàng. `commands.c` đọc/ghi model; `QuickCommandsUI` quản lý toolbar dạng FlowBox, vùng cuộn, editor, menu và Manage. Main nhận callback dispatch để giải quyết active pane.
 
 ```mermaid
 sequenceDiagram
@@ -264,6 +267,16 @@ sequenceDiagram
 
 Không tokenize command, không nội suy qua shell phụ, không gọi `system()`/`popen()`, không tự Ctrl+C/xóa dòng. Shell local, SSH remote hay `vim` quyết định ý nghĩa byte nhận được. Input có nhiều dòng có thể được chương trình diễn giải ngay theo trạng thái của nó.
 
+### 6.1a. Sequence và vòng đời input
+
+`command-sequence.c` quản lý một hash pane → lượt đang gửi trên GTK main thread. Lượt chạy giữ `pane_ref`, bản sao sâu định nghĩa và ref token `GCancellable` của session. Hàng đầu gửi ngay; các hàng sau dùng `g_timeout_add` hoặc idle khi delay 0, không block UI và không đợi output/prompt/exit code. Delay hàng cuối bị bỏ qua. Run được xóa sau lượt gửi cuối, nên trạng thái hoàn tất chỉ xác nhận đã gửi input. Cùng pane đang bận từ chối Quick Commands khác; pane khác độc lập.
+
+`pane.c` thay token và cancel token cũ khi exit, close, disconnect hoặc bắt đầu reconnect (kể cả sau đó hủy password). Handler hủy xóa timer, bỏ các hàng chưa gửi và thả references. Đóng cửa sổ giải phóng manager trước các tab/pane. Không tự tiếp tục hay chạy lại trên session mới.
+
+`pane_feed_input` gửi qua VTE mà không lấy focus; `pane_send` vẫn gửi và focus như Command cũ. Sequence chỉ focus lúc bắt đầu, giữ nguyên con trỏ pane/session khi đổi tab, và các timer không kéo focus khỏi Draft/pane khác. Nhập tay/paste vẫn có thể xen vào. Không tự Ctrl+C hoặc rollback lệnh đã gửi.
+
+Editor dùng mỗi hàng một GtkEntry, GtkSpinButton delay và nút lên/xuống/xóa. GtkStack đổi delay thành — ở hàng cuối; thứ tự widget/model thay cùng nhau, delay đi theo hàng. Lưu validation chung và rollback model khi thất bại, như Command hiện có.
+
 ### 6.2. CRUD, vị trí danh sách và kéo thả
 
 Editor thao tác theo ID, giữ nội dung nếu validation/save thất bại. Delete từ menu/Manage đi qua confirm mặc định Cancel. Manage dùng hàng ổn định theo ID để giữ scroll và focus; khi xóa chọn hàng kế tiếp, hoặc hàng trước nếu xóa cuối. Chỉ cuộn vừa đủ để hàng được chọn hiển thị.
@@ -272,9 +285,9 @@ Toolbar DnD dùng payload nội bộ `G_TYPE_OBJECT`, không cung cấp `text/pl
 
 ### 6.3. Persistence và rollback
 
-Model được giữ theo `GPtrArray`, thứ tự chính là thứ tự serialize. Save Quick Commands tạo sibling temp bằng `g_mkstemp()`, ghi đủ bytes với xử lý `EINTR`, `fsync()`, close rồi `rename()`. Lỗi trước rename xóa temp và giữ file cũ; UI rollback thay đổi chưa lưu.
+Model được giữ theo `GPtrArray`, thứ tự chính là thứ tự serialize. Save Quick Commands dùng `g_file_set_contents_full(CONSISTENT | DURABLE)` để ghi thay thế atomic với mode file mới 0600; nâng v1 tạo backup nguyên byte trước commit. Lỗi ghi giữ file cũ; UI rollback thay đổi chưa lưu.
 
-Load kiểm tra root/version/array, trường bắt buộc, UTF-8 không chỉ whitespace và ID duy nhất. File chưa có trả danh sách rỗng. File lỗi trả GError; UI thông báo, khóa chỉnh sửa để không ghi đè cấu hình lỗi bằng danh sách rỗng. Save API giả định caller cung cấp model đã được validate; không nên dùng nó như một validator độc lập cho mọi dữ liệu tùy ý.
+Load kiểm tra root/version/array, trường bắt buộc, UTF-8 không chỉ whitespace và ID duy nhất. File chưa có trả danh sách rỗng. File lỗi trả GError; UI thông báo, khóa chỉnh sửa để không ghi đè cấu hình lỗi bằng danh sách rỗng. Save cũng kiểm tra model và ID trùng trước khi đụng file; file nguồn đang lỗi bị từ chối ghi đè.
 
 ## 7. Search, snapshot và Draft
 
@@ -453,40 +466,26 @@ Review struct có refcount; prepare/replace tasks giữ reference và dữ liệ
 
 ### 11.1. XDG và bảo toàn cấu hình
 
-Hai model dùng `$XDG_CONFIG_HOME/devterm/`; khi biến thiếu/rỗng fallback `~/.config/devterm/`. Tạo directory với mode 0700. Quick Commands dùng temp 0600/rename; Sessions dùng `g_file_set_contents_full()` với `CONSISTENT | DURABLE`, mode 0600. Mode này không phải thao tác siết lại quyền mọi directory/file cũ đã có từ trước.
+Hai model dùng `$XDG_CONFIG_HOME/devterm/`; khi biến thiếu/rỗng fallback `~/.config/devterm/`. Tạo directory với mode 0700. Quick Commands và Sessions dùng `g_file_set_contents_full()` với `CONSISTENT | DURABLE`, mode 0600. Mode này không phải thao tác siết lại quyền mọi directory/file cũ đã có từ trước.
 
-File version khác 1, sai loại dữ liệu, thiếu field hoặc ID trùng bị từ chối. Không có migration tự động. Không merge khi nhiều tiến trình/công cụ cùng chỉnh JSON; atomic replace chỉ ngăn partial file, có thể last-writer-wins. Dữ liệu dùng chung `known_hosts` có cơ chế conflict check riêng đã mô tả.
+Sessions chỉ đọc version 1. Quick Commands đọc version 1/2 và ghi version 2; lúc nâng từ v1 lưu backup nguyên byte `commands.json.v1-<UUID>.bak` trước commit. Load không sửa file. Version khác hỗ trợ, sai loại dữ liệu, thiếu field hoặc ID trùng bị từ chối. Lưu Quick Commands kiểm tra lại file hiện có và từ chối ghi đè nếu đã hỏng. Không merge khi nhiều tiến trình/công cụ cùng chỉnh JSON; atomic replace chỉ ngăn partial file, có thể last-writer-wins. Dữ liệu dùng chung `known_hosts` có cơ chế conflict check riêng đã mô tả.
 
 ### 11.2. `commands.json`
 
-```json
-{
-  "version": 1,
-  "commands": [
-    {
-      "id": "2cf44db0-9124-445b-921b-c967520a8fe6",
-      "name": "Check internet",
-      "command": "ping 8.8.8.8",
-      "send_enter": true
-    },
-    {
-      "id": "3382daed-d0b2-4e5f-82b7-e953239ca402",
-      "name": "Nháp lệnh",
-      "command": "printf '%s\\n' 'Xin chào' | cat",
-      "send_enter": false
-    }
-  ]
-}
-```
+Ví dụ schema v2 trộn hai loại nút và quy tắc migration ở [README](../README.md#cấu-hình-quick-commands).
 
 | Field | Kiểu / ràng buộc |
 | --- | --- |
-| `version` | Integer bằng 1 |
+| `version` | Integer 1 hoặc 2 khi đọc, luôn ghi 2 |
 | `commands` | Array, thứ tự phần tử là thứ tự toolbar/Manage |
-| `id` | String không rỗng/chỉ whitespace, duy nhất trong file, giữ khi edit/reorder |
-| `name` | String UTF-8 không rỗng/chỉ whitespace |
-| `command` | String UTF-8 không rỗng/chỉ whitespace; nội dung được gửi nguyên văn |
-| `send_enter` | Boolean bắt buộc |
+| `id`, `name` | UTF-8 không trống/chỉ whitespace; ID duy nhất và giữ khi edit/reorder/chuyển loại |
+| `kind` | Bắt buộc trong v2: `command` hoặc `sequence`; v1 mặc định `command` |
+| `command`, `send_enter` | Command: text nguyên văn không trống và boolean; giữ tương thích v1 kể cả text nhiều dòng |
+| `steps` | Sequence: array 1–256 phần tử, giữ thứ tự |
+| `steps[].command` | UTF-8 không trống, không chứa CR/LF; gửi nguyên văn + CR |
+| `steps[].delay_ms` | Integer 0–60000; delay sau hàng, hàng cuối chuẩn hóa 0 |
+
+Cả load và save dùng validation schema. Backup v1 phải thành công trước khi ghi v2; lỗi lưu không áp dụng thay đổi UI. Backup không tự xóa; binary cũ không đọc v2. Không chạy lệnh khi load/save.
 
 ### 11.3. `sessions.json`
 
@@ -598,6 +597,8 @@ Payload frontend/helper đặt trong `/usr/lib/devterm/`; `/usr/bin/devterm` g�
 
 ### 13.1. Các nhóm test hiện có
 
+Bảng dưới giữ baseline; phần kiểm thử Sequence mới và tổng lượt hồi quy hiện tại được ghi trong [SEQUENCES-TESTING.md](SEQUENCES-TESTING.md).
+
 | Nhóm Meson | File test | Số test khai báo | Trọng tâm |
 | --- | --- | --- | --- |
 | `commands` | [test-commands.c](../tests/test-commands.c) | 4 | Unicode/order/schema/XDG/save failure |
@@ -627,7 +628,7 @@ Một nhóm test có thể chỉ kiểm một phần yêu cầu; cột thủ cô
 | FR-TERM-01–04 | Pane/VTE/PTY/spawn/lifecycle | `layout`, `contents`, `reconnect` | `vim`/`top`/`ping`, copy/paste, output lớn |
 | FR-TAB-01–06 | App/TerminalTab/TabStrip | `tabs`, `layout` | Drag native, auto-scroll, hủy ngoài vùng, empty workspace |
 | FR-SPLIT-01–04 | LayoutNode/GtkPaned/deferred balance | `layout`, `tabs`, `reconnect` | Kéo divider, split nhanh, cửa sổ nhỏ và mixed layout |
-| FR-QC-01–06 | QuickCommand/QuickCommandsUI/dispatch/atomic save | `commands`, `quick-ui` | Input tới foreground/SSH, không có Ctrl+C tự động, drag không thực thi |
+| FR-QC-01–10 | QuickCommand/QuickCommandsUI/CommandSequences/dispatch/atomic save và backup v1 | `commands`, `quick-ui`, `sequence`, `reconnect`, `tabs` | Input tới foreground/SSH, không có Ctrl+C tự động, drag không thực thi |
 | FR-SCROLL-01–02 | VTE adjustment, scroll-on flags, selection | `contents` | Kéo lúc output chạy, gõ về cuối, input không lọt |
 | FR-SEARCH-01–03 | Pane search/PCRE2/debounce | `search` | Focus/shortcut, nhiều tab, raw PTY kiểm phím |
 | FR-TEXT-01–03 | Snapshot/GBytes/GtkFileDialog/export worker | `contents`, `export` | Save/overwrite dialog, đổi tab khi pending, clipboard desktop |

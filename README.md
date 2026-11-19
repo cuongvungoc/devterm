@@ -76,6 +76,20 @@ Giao diện mặc định dùng nền tối slate với điểm nhấn teal. Men
 
 Nếu shell đã thoát hoặc chưa khởi động được, DevTerm báo lỗi trên pane hoặc thanh trạng thái và không gửi Quick Command vào pane đó.
 
+**Sequence — nhiều lệnh, mỗi bước một hàng:**
+
+1. Bấm **Add Command**, chọn **Type → Sequence**, nhập tên nút.
+2. Mỗi hàng nhập một command. **Add Command Step** thêm hàng; các nút mũi tên lên/xuống và thùng rác đổi thứ tự hoặc xóa hàng. Delay đi cùng hàng khi di chuyển.
+3. Đặt **delay sau lệnh** bằng mili giây (0–60000 ms). Hàng cuối hiển thị **—**, không có thời gian chờ sau cùng. Mỗi sequence chứa 1–256 hàng; mỗi hàng gửi nguyên nội dung rồi Enter. Dùng Command thông thường nếu cần chỉ điền lệnh mà không Enter.
+4. **Save** chỉ lưu; click nút trên thanh Quick Commands để gửi chuỗi. Tooltip cho xem thứ tự lệnh và delay. Sửa, xóa, đổi thứ tự nút sequence giống command thông thường.
+
+DevTerm gửi hàng đầu ngay, sau đó dùng timer bất đồng bộ cho từng delay; UI tiếp tục hoạt động. Delay chỉ là khoảng cách giữa các lượt gửi, **không chờ command hoàn tất**, không kiểm tra exit code hoặc prompt, không tự dừng khi command báo lỗi. Nếu cần phụ thuộc thành công, có thể viết shell operators như `cd /srv/app && pwd` trong một hàng. Những chương trình cần tương tác/password hoặc chạy liên tục vẫn nhận input theo trạng thái foreground; chọn chuỗi và delay phù hợp với phiên terminal.
+
+Pane/session đích được cố định khi bắt đầu. Đổi pane/tab hoặc mở Draft không đổi đích và các hàng tiếp theo không lấy lại focus. Sửa/xóa định nghĩa trong lúc đang gửi không đổi lượt chạy hiện tại. Mỗi pane nhận một sequence tại một thời điểm; bấm lại hoặc bấm Quick Command khác trên cùng pane khi đang gửi sẽ báo bận, không xếp hàng. Pane khác vẫn dùng Quick Commands bình thường; bàn phím/paste thủ công vẫn hoạt động và có thể xen vào chuỗi.
+
+Không có Continue/Stop. Đóng pane/tab/app, shell exit, Disconnect hoặc bắt đầu Reconnect sẽ hủy các hàng chưa gửi; Cancel hộp thoại reconnect cũng không khôi phục chuỗi cũ. Những lệnh đã gửi vẫn có thể đang chạy: việc hủy không gửi Ctrl+C và không hoàn tác chúng. Thanh trạng thái phân biệt đang chờ, đã gửi hết và hủy; “đã gửi hết” không có nghĩa là các lệnh đã thực thi xong.
+
+
 Giới hạn của search trên VTE 0.76: điều hướng trước/sau chỉ chọn một lần xuất hiện trên mỗi dòng logic (một dòng có thể được bọc thành nhiều dòng hiển thị). Nhiều lần xuất hiện trên cùng một dòng không được duyệt riêng. Đây là giới hạn của [bộ tìm kiếm VTE 0.76](https://github.com/GNOME/vte/blob/0.76.0/src/vte.cc#L11157).
 
 ## Phím tắt tùy chỉnh
@@ -190,25 +204,39 @@ File nằm tại `$XDG_CONFIG_HOME/devterm/commands.json`. Khi `XDG_CONFIG_HOME`
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "commands": [
     {
       "id": "unique-stable-id",
       "name": "Check internet",
+      "kind": "command",
       "command": "ping 8.8.8.8",
       "send_enter": true
+    },
+    {
+      "id": "another-stable-id",
+      "name": "Inspect project",
+      "kind": "sequence",
+      "steps": [
+        {"command": "cd '/srv/Ứng dụng'", "delay_ms": 200},
+        {"command": "pwd", "delay_ms": 0}
+      ]
     }
   ]
 }
 ```
 
-DevTerm không tự chạy command khi đọc file. Nếu JSON lỗi, phiên bản không hỗ trợ, thiếu trường bắt buộc hoặc ID trùng, terminal vẫn mở; thông báo lỗi xuất hiện và việc sửa Quick Commands bị khóa để file lỗi không bị ghi đè. Hãy sửa hoặc di chuyển file lỗi rồi mở lại ứng dụng. Nếu ghi file thất bại, thanh trạng thái sẽ báo lỗi.
+Ứng dụng vẫn đọc file **version 1** hiện có như danh sách Command thông thường, giữ ID, thứ tự, nội dung và `send_enter`. Đọc file không ghi lại cấu hình và không chạy lệnh. Lần lưu thành công đầu tiên nâng lên version 2; trước khi thay file v1, tạo bản sao đúng byte tên **`commands.json.v1-<UUID>.bak`** cùng thư mục. Lỗi backup khiến thao tác lưu bị từ chối. Bản sao không tự xóa; nếu cần chạy binary cũ chỉ hỗ trợ v1, giữ lại file v2 và chủ động khôi phục bản v1 phù hợp (các thay đổi mới không nằm trong bản v1).
+
+Version 2 yêu cầu `kind`. Với `command`, giữ `command` và `send_enter`; với `sequence`, lưu mảng `steps` theo thứ tự, mỗi bước có command một dòng không trống và `delay_ms` số nguyên 0–60000. Delay hàng cuối được chuẩn hóa thành 0. Ghi atomic với `CONSISTENT | DURABLE`, file mới mode 0600. JSON lỗi, version không hỗ trợ, trường sai hoặc ID trùng bị từ chối toàn bộ: terminal vẫn dùng được, thông báo lỗi xuất hiện và khóa sửa Quick Commands để giữ file lỗi. Lưu cũng từ chối ghi đè file đã trở nên không hợp lệ sau khi mở ứng dụng. Hãy sửa/di chuyển file lỗi rồi mở lại; lỗi ghi giữ nguyên model đang dùng và editor để thử lại. Không merge thay đổi từ nhiều tiến trình cùng sửa file.
 
 ## Kiểm thử
 
-`meson test` có mười bốn nhóm kiểm tra (80 test khi có đủ dependency và display):
+Các ca mới cho Sequence bao gồm round-trip cấu hình trộn Command/Sequence, backup v1 đúng byte, từ chối dữ liệu lỗi, thêm/di chuyển/xóa hàng qua dialog, chuyển loại giữ ID, gửi đúng delay qua PTY thật, giữ pane/tab/focus đích, sao chụp định nghĩa khi chạy, chặn gửi chồng và hủy khi exit/close/disconnect/reconnect. Nhóm `sequence` có 3 test; hai nhóm phím tắt được mô tả trong [SHORTCUTS-TESTING.md](docs/SHORTCUTS-TESTING.md).
 
-- `commands`: 4 test cho round-trip Unicode, dấu nháy, shell operators, thứ tự, `send_enter`, đường dẫn XDG, dữ liệu lỗi và lỗi ghi file vẫn giữ nguyên nội dung cũ.
+`meson test` hiện có 17 nhóm kiểm tra khi có đủ dependency và display; kết quả của bản Sequence nằm trong [báo cáo kiểm thử](docs/SEQUENCES-TESTING.md).
+
+- `commands`: 7 test cho round-trip Unicode, dấu nháy, shell operators, thứ tự, `send_enter`, đường dẫn XDG, dữ liệu lỗi và lỗi ghi file vẫn giữ nguyên nội dung cũ.
 - `layout`: 6 test tích hợp với shell/PTY thật cho bố cục độc lập, kế thừa thư mục có dấu cách, bỏ qua thông tin thư mục remote, fallback sau shell exit và giải phóng pane khi spawn chưa hoàn tất. Các test hình học dùng cửa sổ được hiển thị thật để đo chia đôi khi split phải/xuống liên tiếp, split khác hướng, chọn lại pane cũ, giữ divider đã chỉnh khi resize/đóng pane, split nhiều lần trước khi bố trí và đóng split đang chờ khi cửa sổ bị ẩn. Nhóm này tự bỏ qua nếu không có display; cần X11 hoặc Wayland để chạy đầy đủ.
 - `search`: 4 test với VTE thật cho Unicode, ký tự regex được tìm nguyên văn, scrollback, Match case, Find whole words only (gồm chữ số, `_`, dấu Unicode dạng tổ hợp và kết hợp Match case), trước/sau/quay vòng, trạng thái độc lập giữa pane, search sau shell exit, pane bị ẩn rồi hiển thị lại và đóng pane khi search đang chờ. Nhóm này cũng tự bỏ qua nếu không có display.
 - `contents`: 4 test với VTE thật cho clipboard khớp snapshot, Unicode, bỏ ANSI, lấy scrollback khi đang cuộn ở đầu, giữ vùng chọn/vị trí cuộn, loại nội dung đã vượt giới hạn buffer, dòng dài sau resize, buffer độc lập giữa pane, snapshot không đổi khi có output mới/đóng pane, màn hình thay thế và shell exit. Ca scrollbar kiểm tra vị trí bên phải, luôn hiện/kích thước ổn định, giữ vị trí khi có output, theo dõi output ở cuối, đồng bộ Search, độc lập giữa pane và cuộn sau shell exit. Cần display để chạy nhóm này.
@@ -217,11 +245,11 @@ DevTerm không tự chạy command khi đọc file. Nếu JSON lỗi, phiên b�
 - `session-ui`: 3 test GTK cho thêm/nhân bản/xóa profile, nhập password, ghi nhớ từ hộp thoại Connect, lưu/lấy/xóa credential qua libsecret, hủy request khi đóng ứng dụng và giữ file cấu hình lỗi. Test chạy D-Bus và GNOME Keyring riêng với thư mục tạm, không dùng keyring thật của người dùng. Cần display và `gnome-keyring-daemon`.
 - `connections`: 15 test với client thật và server SSH/Telnet loopback hoặc cổng Serial giả lập bằng PTY: tự đăng nhập, tương tác, resize, initial Enter, lỗi cổng, echo password không lọt vào output, sai password không retry, prompt lạ/timeout/hủy, host key thay đổi, hủy/chấp nhận host mới và từ chối tiến trình lạ đọc password qua IPC; kiểm tra thông báo đổi khóa qua kênh riêng ở cả password/key, và output remote giả cảnh báo không kích hoạt thay khóa sau đăng nhập password/key. Cần OpenSSH, Telnet, picocom; SSH server thử nghiệm cần Python `asyncssh`; thao tác hộp thoại host key cần X11 và `xdotool`. Các phần thiếu dependency được báo skip.
 - `draft`: 3 test GTK cho Copy toàn bộ/vùng chọn với Unicode, giữ nguyên khoảng trắng/xuống dòng, Clear/Cancel/Undo/Redo, tính nội dung của nháp kể cả khoảng trắng, tỷ lệ mở đầu 70/30, giữ nội dung/Undo/vị trí cuộn và tỷ lệ đã chỉnh sau khi ẩn/mở hoặc resize, và giải phóng editor khi hộp thoại Clear còn mở. Nhóm chạy riêng để không tranh clipboard với các test khác; cần display.
-- `reconnect`: 9 test với VTE/PTY/helper thật và client giả lập xác định cho SSH/Telnet/Serial: kết nối nhiều lần trong cùng terminal widget, giữ tab/split/divider/Draft/scrollback Unicode và tìm kiếm output cũ, reset chế độ terminal sau màn hình thay thế, bản chụp profile, chờ client cũ thoát (khóa độc quyền để phát hiện kết nối chồng), reconnect sau disconnect/exit, hủy password giữ client cũ, chặn input/Quick Commands, đổi active pane khi đang nhập password, đóng pane khi chờ password/keyring hoặc spawn và hủy khi manager đóng. Giao thức/xác thực thực tế được kiểm tra riêng trong nhóm `connections`. Cần display; D-Bus được cô lập.
+- `reconnect`: 10 test với VTE/PTY/helper thật và client giả lập xác định cho SSH/Telnet/Serial: kết nối nhiều lần trong cùng terminal widget, giữ tab/split/divider/Draft/scrollback Unicode và tìm kiếm output cũ, reset chế độ terminal sau màn hình thay thế, bản chụp profile, chờ client cũ thoát (khóa độc quyền để phát hiện kết nối chồng), reconnect sau disconnect/exit, hủy password giữ client cũ, chặn input/Quick Commands, đổi active pane khi đang nhập password, đóng pane khi chờ password/keyring hoặc spawn và hủy khi manager đóng. Giao thức/xác thực thực tế được kiểm tra riêng trong nhóm `connections`. Cần display; D-Bus được cô lập.
 
-- `quick-ui`: 6 test GTK cho sửa Unicode theo ID khi tên trùng, xác nhận/hủy xóa, giữ widget/focus/vùng cuộn với 80 command sau Move/Edit/Delete, vô hiệu Move ở hai đầu, hoàn tác Move/Delete/Edit khi lỗi lưu, giữ nội dung editor để thử lại, trạng thái trống/JSON lỗi và đóng cửa sổ/dialog khi còn cập nhật focus đang chờ. Test dữ liệu kéo xác nhận không xuất text/plain hoặc chuỗi để tránh paste vào terminal khi thả nhầm. Cần display; dùng input method `simple` trong test.
+- `quick-ui`: 7 test GTK cho sửa Unicode theo ID khi tên trùng, xác nhận/hủy xóa, giữ widget/focus/vùng cuộn với 80 command sau Move/Edit/Delete, vô hiệu Move ở hai đầu, hoàn tác Move/Delete/Edit khi lỗi lưu, giữ nội dung editor để thử lại, trạng thái trống/JSON lỗi và đóng cửa sổ/dialog khi còn cập nhật focus đang chờ. Test dữ liệu kéo xác nhận không xuất text/plain hoặc chuỗi để tránh paste vào terminal khi thả nhầm. Cần display; dùng input method `simple` trong test.
 
-- `tabs`: 5 test tích hợp cửa sổ thật cho đổi tên Unicode theo ID (kể cả tên trùng và tab không active), kiểm tra tên không hợp lệ/độ dài/Hủy, đồng bộ tooltip/header Draft, sắp xếp và giới hạn Move, giữ pane/split/Draft/Undo khi di chuyển, xác nhận đóng đúng tab theo tên mới, và đóng tab/cửa sổ khi dialog Rename đang mở. Cần display; D-Bus và cấu hình được cô lập.
+- `tabs`: 6 test tích hợp cửa sổ thật cho đổi tên Unicode theo ID (kể cả tên trùng và tab không active), kiểm tra tên không hợp lệ/độ dài/Hủy, đồng bộ tooltip/header Draft, sắp xếp và giới hạn Move, giữ pane/split/Draft/Undo khi di chuyển, xác nhận đóng đúng tab theo tên mới, và đóng tab/cửa sổ khi dialog Rename đang mở. Cần display; D-Bus và cấu hình được cô lập.
 
 - `host-key`: 7 test backend với public key Ed25519/RSA và `ssh-keygen` thật; giữ nguyên host/port khác, entry hash/alias, tạo backup đúng byte/quyền riêng tư, Cancel, xung đột sửa file, khóa ứng viên không khớp/đã được lưu, file không có quyền ghi/ngoài cấu hình, marker CA/revocation/wildcard/proxy, port 22 và IPv6. SSH config/scan dùng fixture cục bộ, không truy cập thiết bị thật.
 - `host-key-ui`: 4 test GTK/VTE/PTY/helper thật với client giả lập: Cancel là mặc định, bắt buộc đánh dấu xác minh, Copy không đóng dialog, thay khóa/reconnect đúng pane dù pane khác đang active, giữ split/Draft/output, không reconnect khi file bị sửa, đóng pane/cửa sổ khi review đang mở hoặc đang scan (tiến trình scan được hủy).
@@ -279,5 +307,9 @@ Checklist kiểm tra thủ công trên hệ thống cài dependency bình thư�
 
 13. Tạo output dài ở nhiều pane, kéo scrollbar của pane chưa được chọn và bấm Quick Command; xác nhận đúng pane nhận input. Kéo lên khi output vẫn chạy, gõ phím để về cuối, thử kéo về cuối để tiếp tục theo dõi. Đổi tab, mở Search, split/resize/đóng pane và shell exit; xác nhận scrollbar luôn nằm bên phải, không phủ chữ và mỗi pane cuộn độc lập.
 14. Mở Draft ở nhiều tab; soạn văn bản tự do nhiều dòng, Copy vùng chọn/toàn bộ, Clear rồi Undo/Redo. Ẩn/mở, kéo divider, split terminal, resize và đổi tab; xác nhận nháp và focus được giữ riêng. Thử đóng tab/app khi nháp đang ẩn hoặc shell đã exit, chọn Cancel rồi đóng lại; chỉ thao tác xác nhận mới loại bỏ nháp. Khởi động lại ứng dụng xác nhận Draft bắt đầu trống.
+
+15. Tạo Sequence ba hàng với delay khác nhau; đổi thứ tự, xóa hàng cuối và xác nhận dấu — chuyển sang hàng cuối mới. Save/Cancel, đóng/mở ứng dụng, sửa cả Command và Sequence.
+16. Chạy Sequence trên pane A rồi chuyển sang pane B/tab khác hoặc Draft: các hàng vẫn đến A, focus không bị lấy lại. Bấm lại trong lúc chờ phải báo bận. Thử delay 0 và lệnh báo lỗi để xác nhận delay không chờ kết quả.
+17. Trong delay, thử exit, đóng pane/tab, Disconnect và Reconnect; cả Cancel password cũng phải bỏ các hàng chưa gửi. Thử trên thiết bị remote thật và shell đang mở chương trình tương tác; không có Ctrl+C tự động.
 
 Kiểm tra Sessions trên ứng dụng thật với X11/Xvfb và Telnet loopback đã xác nhận Connect mở tab mới, password không xuất hiện trong buffer Copy All Text, input remote hoạt động, split tạo shell local riêng và đóng pane remote dừng kết nối. Keyring và SSH dùng dịch vụ/server thử nghiệm riêng; Serial chỉ dùng PTY giả lập. Chưa kiểm tra router/server production, thiết bị Serial vật lý hoặc tương tác trên Wayland; chưa chạy `vim`, `top`, `ping` trong phiên kiểm thử tự động. Lỗi GDK từng ghi nhận khi kiểm thử đóng cửa sổ xuất phát từ việc hủy trực tiếp X surface bằng `xdotool windowclose`; kiểm tra lại bằng yêu cầu đóng chuẩn của window manager đã qua.

@@ -11,6 +11,7 @@
 - Draft nằm dưới các terminal trong tab, không chứa action gửi lệnh. Giữ nguyên cơ chế RAM, focus và xác nhận mất nháp.
 - Menu pane chứa Copy All Text, Export Text, Close Pane và Close Tab. Action không phù hợp bị vô hiệu hóa khi workspace trống; Export bị khóa trong lúc có thao tác export đang chờ.
 - Quick Commands có Add Command/Manage cố định phía trên, các nút bên dưới xuống hàng trước khi rút gọn tên dài. Vùng nút có chiều cao giới hạn và cuộn dọc khi cần; thứ tự vẫn theo cấu hình.
+- Editor Quick Commands có Type Command/Sequence. Sequence dùng hàng lệnh riêng: số thứ tự, ô command co giãn, delay sau lệnh có đơn vị ms, nút lên/xuống/xóa có tooltip và accessible label; hàng cuối hiển thị —. Danh sách cuộn dọc, Add Command Step ở ngoài vùng cuộn. Chỉ một nút Save, không thêm Continue/Stop.
 - Footer ghi trạng thái hiện tại và tổng tab/số terminal pane của tab đang xem. Thông báo dài có tooltip.
 - Sessions hiển thị loại giao thức, tên và endpoint thành các cấp riêng; trạng thái trống hướng dẫn tạo profile.
 

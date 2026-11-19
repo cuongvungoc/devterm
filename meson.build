@@ -1,4 +1,4 @@
-project('devterm', 'c', version: '0.4.0', default_options: ['c_std=c11', 'warning_level=2'])
+project('devterm', 'c', version: '0.5.0', default_options: ['c_std=c11', 'warning_level=2'])
 
 version_config = configuration_data()
 version_config.set_quoted('DEVTERM_VERSION', meson.project_version())
@@ -23,7 +23,7 @@ runtime_src = []
 if get_option('bundled_runtime')
     runtime_src = files('src/runtime.c')
 endif
-app_src = ['src/shortcuts.c', 'src/shortcuts-ui.c', 'src/tab-strip.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src]
+app_src = ['src/command-sequence.c', 'src/shortcuts.c', 'src/shortcuts-ui.c', 'src/tab-strip.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src]
 executable('devterm', ['src/main.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
 executable('devterm-connect', ['src/connect-helper.c', 'src/sessions.c', 'src/login.c', runtime_src], dependencies: [gtk, json, gio, util], install: true)
 test_exe = executable('test-commands', ['tests/test-commands.c', src], dependencies: [json, gio])
@@ -44,7 +44,7 @@ test('session-ui', find_program('dbus-run-session'), args: ['--', session_ui_tes
 test('connections', find_program('python3'), args: [files('tests/test-connections.py'), meson.current_build_dir() / 'devterm-connect'], is_parallel: false, timeout: 90)
 draft_test = executable('test-draft', ['tests/test-draft.c', 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk])
 test('draft', draft_test, env: ['G_DEBUG=fatal-criticals'], is_parallel: false, timeout: 30)
-reconnect_test = executable('test-reconnect', ['tests/test-reconnect.c', terminal_src, 'src/sessions-ui.c', 'src/credentials.c', 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk, vte, json, gio, pcre, secret])
+reconnect_test = executable('test-reconnect', ['tests/test-reconnect.c', 'src/command-sequence.c', src, terminal_src, 'src/sessions-ui.c', 'src/credentials.c', 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk, vte, json, gio, pcre, secret])
 test('reconnect', find_program('dbus-run-session'), args: ['--', reconnect_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals'], is_parallel: false, timeout: 90)
 quick_ui_test = executable('test-quick-ui', ['tests/test-quick-ui.c', 'src/quick-commands-ui.c', 'src/confirm-dialog.c', src], dependencies: [gtk, json, gio])
 test('quick-ui', quick_ui_test, env: ['G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)
@@ -59,3 +59,6 @@ shortcuts_test = executable('test-shortcuts', ['tests/test-shortcuts.c', 'src/sh
 test('shortcuts', shortcuts_test, env: ['G_DEBUG=fatal-criticals'], timeout: 30)
 shortcuts_ui_test = executable('test-shortcuts-ui', ['tests/test-shortcuts-ui.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret])
 test('shortcuts-ui', find_program('dbus-run-session'), args: ['--', shortcuts_ui_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple', 'GDK_BACKEND=x11'], is_parallel: false, timeout: 90)
+
+sequence_test = executable('test-sequence', ['tests/test-sequence.c', 'src/command-sequence.c', terminal_src, src], dependencies: [gtk, vte, json, gio, pcre])
+test('sequence', sequence_test, env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 30)

@@ -10,6 +10,8 @@
 | Trạng thái | Đặc tả theo hành vi hiện có; các giới hạn và hướng mở rộng được ghi riêng |
 | Tài liệu thiết kế | [SDD.md](SDD.md) |
 
+> Cập nhật 19/11/2026: phần Quick Commands bổ sung Sequence và cấu hình v2; các phần còn lại giữ baseline nêu trên. Xem [kiểm thử Sequence](SEQUENCES-TESTING.md).
+
 ## Mục lục
 
 1. [Mục đích và cách đọc](#1-mục-đích-và-cách-đọc)
@@ -140,7 +142,11 @@ Các mục tiêu đóng gói là ma trận phát hành, không có nghĩa một 
 | FR-QC-03 | Phải giữ đích khi toolbar lấy focus, trả focus về pane sau gửi, báo lỗi khi pane không nhận input. | Không gửi vào pane khác; không tự Ctrl+C, xóa dòng hoặc ngắt foreground; pane exit/reconnect được xử lý an toàn. |
 | FR-QC-04 | Chuột phải command phải có Edit/Delete; xóa từ mọi nơi phải hỏi xác nhận. | Đúng ID dù danh sách đổi thứ tự; Cancel là lựa chọn mặc định và giữ nguyên command. |
 | FR-QC-05 | Manage phải có Move Up/Down; toolbar hỗ trợ kéo thả sắp xếp. | Giữ scroll/focus tại hàng thao tác; thứ tự toolbar và Manage đồng bộ; chỉ drop hợp lệ mới lưu; hủy kéo không gửi input. |
-| FR-QC-06 | Phải lưu/khôi phục thứ tự và nội dung atomic trong `commands.json` version 1. | Khởi động không chạy command; file lỗi được giữ nguyên và khóa chỉnh sửa; lỗi lưu không để UI hiển thị như đã lưu thành công. Khi rỗng có hướng dẫn và Add Command. |
+| FR-QC-06 | Phải lưu/khôi phục thứ tự và nội dung atomic trong `commands.json` version 2, tiếp tục đọc version 1. | Khởi động không chạy command; file lỗi được giữ nguyên và khóa chỉnh sửa; lỗi lưu không để UI hiển thị như đã lưu thành công. Khi rỗng có hướng dẫn và Add Command. |
+| FR-QC-07 | Editor phải có loại Command/Sequence; Sequence gồm 1–256 hàng command một dòng và delay riêng 0–60000 ms sau hàng. | Có thêm, lên/xuống, xóa; delay đi theo hàng; hàng cuối hiển thị — và không chờ. Mọi hàng gửi thêm Enter; không có Continue/Stop. Save/Cancel không gửi input. |
+| FR-QC-08 | Sequence phải gửi bất đồng bộ vào đúng pane/session ban đầu và dùng bản chụp định nghĩa lúc chạy. | Delay chỉ giãn lượt gửi, không chờ kết quả/prompt. Đổi pane/tab không đổi đích, không kéo focus lại. Mỗi pane chỉ một chuỗi, Quick Command khác báo bận khi đang gửi. |
+| FR-QC-09 | Phải hủy hàng chưa gửi khi exit/close/disconnect hoặc bắt đầu reconnect. | Không gửi vào session mới; Cancel reconnect không tiếp tục chuỗi cũ. Không Ctrl+C/hoàn tác lệnh đã gửi; shutdown giải phóng timer trước pane. |
+| FR-QC-10 | Nâng v1 khi người dùng lưu phải tạo backup đúng byte trước khi thay file. | Load không ghi file; giữ ID/thứ tự/Send Enter; lỗi backup hoặc lưu giữ model cũ. Dữ liệu không hợp lệ được bảo toàn; delay hàng cuối lưu 0. |
 
 Input Quick Commands đến **chương trình foreground**, không nhất thiết là shell. Nếu đang dùng `vim` hoặc `top`, chương trình đó có thể nhận chuỗi. Quick Commands là cấu hình plaintext có tooltip, không phải nơi lưu password.
 

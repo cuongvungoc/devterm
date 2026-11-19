@@ -29,7 +29,7 @@ struct TerminalPane {
     gboolean exited;
     char *working_directory;
     SessionProfile *profile;
-    GCancellable *spawn_cancel;
+    GCancellable *spawn_cancel, *input_session;
     gboolean disconnecting;
     ReconnectState reconnect;
     GCancellable *reconnect_cancel;
@@ -57,6 +57,7 @@ void pane_unref(TerminalPane *p) {
     g_clear_pointer(&p->host_review, ssh_host_key_unref);
     g_clear_object(&p->host_cancel);
     g_clear_object(&p->spawn_cancel);
+    g_clear_object(&p->input_session);
     g_clear_object(&p->reconnect_cancel);
     g_free(p);
 }
@@ -65,6 +66,13 @@ static void pane_message(TerminalPane *p, const char *message) {
     if (p->closed) return;
     gtk_label_set_text(GTK_LABEL(p->label), message);
     if (p->status) p->status(p, message, p->user_data);
+}
+void pane_report_status(TerminalPane *p, const char *message) { pane_message(p, message); }
+GCancellable *pane_input_session(TerminalPane *p) { return p->input_session; }
+static void invalidate_input_session(TerminalPane *p) {
+    GCancellable *old = p->input_session;
+    p->input_session = g_cancellable_new();
+    g_cancellable_cancel(old); g_object_unref(old);
 }
 static void host_review_cancel(TerminalPane *p) {
     if (p->host_cancel) g_cancellable_cancel(p->host_cancel);
@@ -397,6 +405,7 @@ static void on_child_exit(VteTerminal *terminal, int status, gpointer data) {
     p->running = FALSE;
     p->exited = TRUE;
     p->child = 0;
+    invalidate_input_session(p);
     if (p->closed) return;
     if (p->reconnect == RECONNECT_STOPPING) { maybe_reconnect(p); return; }
     if (p->reconnect == RECONNECT_STARTING) clear_reconnect(p);
@@ -506,6 +515,7 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     p->user_data = user_data;
     p->profile = profile ? session_profile_copy(profile) : NULL;
     p->spawn_cancel = g_cancellable_new();
+    p->input_session = g_cancellable_new();
     p->working_directory = g_strdup(working_directory && g_path_is_absolute(working_directory) &&
                                    g_file_test(working_directory, G_FILE_TEST_IS_DIR) ? working_directory : g_get_home_dir());
     p->root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -591,6 +601,7 @@ const SessionProfile *pane_session_profile(TerminalPane *p) { return p ? p->prof
 GCancellable *pane_prepare_reconnect(TerminalPane *p) {
     if (!p || p->closed || !p->profile) return NULL;
     if (p->reconnect != RECONNECT_NONE) { pane_message(p, "Reconnect already in progress for this pane"); return NULL; }
+    invalidate_input_session(p);
     host_review_cancel(p);
     p->reconnect = RECONNECT_PASSWORD;
     p->reconnect_cancel = g_cancellable_new();
@@ -626,6 +637,7 @@ void pane_finish_reconnect_request(TerminalPane *p) {
 gboolean pane_is_reconnecting(TerminalPane *p) { return p && !p->closed && p->reconnect != RECONNECT_NONE; }
 void pane_disconnect(TerminalPane *p) {
     if (!p || p->closed || !p->profile) return;
+    invalidate_input_session(p);
     host_review_cancel(p);
     cancel_reconnect(p);
     p->disconnecting = TRUE; g_cancellable_cancel(p->spawn_cancel);
@@ -695,15 +707,19 @@ char *pane_dup_working_directory(TerminalPane *p) {
     if (p && !p->closed && p->starting) return g_strdup(p->working_directory);
     return g_strdup(g_get_home_dir());
 }
-void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
-    if (!pane_is_running(p)) return;
+gboolean pane_feed_input(TerminalPane *p, const char *command, gboolean send_enter) {
+    if (!pane_is_running(p)) return FALSE;
     vte_terminal_feed_child(p->terminal, command, -1);
     if (send_enter) vte_terminal_feed_child(p->terminal, "\r", 1);
-    pane_focus(p);
+    return TRUE;
+}
+void pane_send(TerminalPane *p, const char *command, gboolean send_enter) {
+    if (pane_feed_input(p, command, send_enter)) pane_focus(p);
 }
 void pane_close(TerminalPane *p) {
     if (!p || p->closed) return;
     p->closed = TRUE;
+    invalidate_input_session(p);
     host_notice_clear(p);
     cancel_reconnect(p);
     g_cancellable_cancel(p->spawn_cancel);

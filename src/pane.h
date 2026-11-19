@@ -35,4 +35,9 @@ gboolean pane_is_running(TerminalPane *pane);
 gboolean pane_has_live_session(TerminalPane *pane);
 char *pane_dup_working_directory(TerminalPane *pane);
 void pane_send(TerminalPane *pane, const char *command, gboolean send_enter);
+/* Main-thread input generation. Cancelled on exit, close, disconnect or any
+ * reconnect attempt; a fresh token allows later explicit runs after cancellation. */
+GCancellable *pane_input_session(TerminalPane *pane); /* Borrowed. */
+gboolean pane_feed_input(TerminalPane *pane, const char *command, gboolean send_enter);
+void pane_report_status(TerminalPane *pane, const char *message);
 void pane_close(TerminalPane *pane);
