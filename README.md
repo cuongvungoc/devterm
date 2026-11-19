@@ -2,6 +2,8 @@
 
 DevTerm là terminal desktop native cho Linux, viết bằng C, GTK4 và VTE dành cho GTK4. Mỗi tab có bố cục split riêng; mỗi pane có PTY và shell riêng. Quick Commands gửi nguyên chuỗi command vào pane đang chọn trong tab hiện tại, kể cả khi pane đó đang ở phiên SSH.
 
+Tài liệu yêu cầu và thiết kế: [SRS](docs/SRS.md), [SDD](docs/SDD.md) và [mục lục tài liệu](docs/README.md).
+
 ## Cài bằng gói `.deb`
 
 Gói phát hành hỗ trợ **Ubuntu 22.04 và 24.04**, với **amd64 và arm64** riêng. Chọn đúng hệ điều hành/CPU, rồi cài bằng APT để lấy dependency qua Internet. Ví dụ Ubuntu 24.04 trên Intel/AMD 64 bit:
