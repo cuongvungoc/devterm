@@ -44,9 +44,9 @@ meson compile -C build
 
 ## Sử dụng
 
-Giao diện mặc định dùng nền tối slate với điểm nhấn teal. Menu ứng dụng **☰** có **Dark appearance** để chuyển sang giao diện sáng và **Keyboard Shortcuts** để xem phím tắt; lựa chọn theme đồng bộ giữa các cửa sổ trong cùng tiến trình và hiện chỉ giữ trong phiên chạy. Terminal vẫn dùng nền tối ở cả hai chế độ. Thiết kế và quy chuẩn màu nằm trong [design-system/devterm/MASTER.md](design-system/devterm/MASTER.md).
+Giao diện mặc định dùng nền tối slate với điểm nhấn teal. Menu ứng dụng **☰** có **Dark appearance** để chuyển sang giao diện sáng và **Keyboard Shortcuts** để xem và tùy chỉnh phím tắt; lựa chọn theme đồng bộ giữa các cửa sổ trong cùng tiến trình và hiện chỉ giữ trong phiên chạy. Terminal vẫn dùng nền tối ở cả hai chế độ. Thiết kế và quy chuẩn màu nằm trong [design-system/devterm/MASTER.md](design-system/devterm/MASTER.md).
 
-**New Terminal** và **Sessions** nằm trên header. Toolbar bên dưới nhóm Split Right/Down, Search và Draft; menu **⋮** bên phải chứa **Copy All Text**, **Export Text…**, **Close Pane** và **Close Tab**. Các thao tác pane bị vô hiệu hóa khi chưa có tab. Quick Commands nằm ở vùng riêng phía dưới, luôn có **Add Command** và **Manage**; các nút tự xuống hàng theo chiều rộng, cuộn dọc nếu có nhiều nút. Footer hiển thị thông báo và số tab/pane của tab hiện tại.
+**New Terminal** và **Sessions** nằm trên header. Toolbar bên dưới nhóm Split Right/Down, Search và Draft; menu **⋮** bên phải chứa **Copy All Text**, **Export Text…**, **Reconnect Current Pane**, **Disconnect Current Pane**, **Close Pane** và **Close Tab**. Các thao tác pane bị vô hiệu hóa khi chưa có tab. Quick Commands nằm ở vùng riêng phía dưới, luôn có **Add Command** và **Manage**; các nút tự xuống hàng theo chiều rộng, cuộn dọc nếu có nhiều nút. Footer hiển thị thông báo và số tab/pane của tab hiện tại.
 
 - **New Terminal** hoặc **Ctrl+Shift+T** tạo và chuyển sang tab mới với một shell local. Tên tab lần lượt là `Terminal 1`, `Terminal 2`… Thanh tab cuộn được khi có nhiều tab.
 - Tab mới kế thừa thư mục local của pane đang chọn nếu xác định được, fallback về home. DevTerm đọc thư mục của tiến trình shell local qua `/proc`; đường dẫn remote do SSH báo về không được dùng để khởi động shell local. Tab mới không kế thừa kết nối SSH hoặc biến môi trường được export trong shell của tab cũ.
@@ -77,6 +77,48 @@ Giao diện mặc định dùng nền tối slate với điểm nhấn teal. Men
 Nếu shell đã thoát hoặc chưa khởi động được, DevTerm báo lỗi trên pane hoặc thanh trạng thái và không gửi Quick Command vào pane đó.
 
 Giới hạn của search trên VTE 0.76: điều hướng trước/sau chỉ chọn một lần xuất hiện trên mỗi dòng logic (một dòng có thể được bọc thành nhiều dòng hiển thị). Nhiều lần xuất hiện trên cùng một dòng không được duyệt riêng. Đây là giới hạn của [bộ tìm kiếm VTE 0.76](https://github.com/GNOME/vte/blob/0.76.0/src/vte.cc#L11157).
+
+## Phím tắt tùy chỉnh
+
+Mở **☰ → Keyboard Shortcuts** hoặc **Ctrl+Shift+,**. Tìm theo tên action/nhóm, bấm phím hiện tại (hoặc **Unassigned**) rồi nhấn tổ hợp mới. **Esc** hủy ghi nhận. **Remove** bỏ gán; **Reset** khôi phục một action; **Reset All** khôi phục toàn bộ. **Apply** lưu và áp dụng ngay trong mọi cửa sổ/pane hiện có lẫn tạo sau đó. **Cancel** bỏ các thay đổi chưa Apply; các lần Apply trước đó vẫn được giữ.
+
+Nếu phím đã thuộc action khác, **Reassign** chuyển phím sang action mới và bỏ gán action cũ; **Esc** hủy đề xuất. Mỗi action có một tổ hợp; chưa hỗ trợ chuỗi nhiều bước. Menu và tooltip toolbar cập nhật theo cấu hình hiện tại. Bảng dưới là giá trị mặc định, không phải phím cố định.
+
+| Thao tác | Mặc định |
+| --- | --- |
+| Reconnect / Disconnect Current Pane | Ctrl+Shift+R / Ctrl+Shift+D |
+| Close Pane / Close Tab | Ctrl+Shift+X / Ctrl+Shift+W |
+| Copy All Text / Export Text | Ctrl+Shift+A / Ctrl+Shift+S |
+| Copy vùng chọn / Paste terminal | Ctrl+Shift+C / Ctrl+Shift+V |
+| Split Right / Split Down | Ctrl+Shift+E / Ctrl+Shift+O |
+| Pane tiếp / trước | Ctrl+Shift+PageDown / Ctrl+Shift+PageUp |
+| New Terminal Tab | Ctrl+Shift+T |
+| Tab tiếp / trước | Ctrl+PageDown / Ctrl+PageUp |
+| Rename Tab | Ctrl+Shift+F2 |
+| Find in Pane | Ctrl+Shift+F |
+| Sessions | Ctrl+Shift+K |
+| Hiện/ẩn Draft | Ctrl+Shift+M |
+| Manage Quick Commands | Ctrl+Shift+P |
+| Keyboard Shortcuts | Ctrl+Shift+, |
+| Move Tab Left/Right, chọn pane trái/phải/trên/dưới, Add Quick Command | Chưa gán; có thể tự cấu hình |
+
+Chuyển pane tiếp/trước đi theo thứ tự các lá trong cây split và vòng lại ở hai đầu. Chọn theo hướng dùng vị trí hiển thị, không vòng sang mép đối diện. Các action pane tác động pane được chọn gần nhất trong tab hiện tại, dù toolbar lấy focus. Reconnect/Disconnect chỉ dùng cho SSH/Telnet/Serial do DevTerm mở qua profile; không tự reconnect một lệnh `ssh` gõ thủ công trong shell local. Luồng credential, xác nhận host key và hủy reconnect vẫn giữ nguyên; pane đích được giữ cố định trong lúc chờ. Giữ phím không tự lặp action. Close Pane giữ chính sách hiện có: pane riêng đóng ngay; pane cuối đi qua luồng đóng tab/xác nhận.
+
+Phím do DevTerm quản lý được xử lý trước terminal. **Copy/Paste terminal chỉ nhận phím khi VTE có focus**; ô nhập, Search và Draft giữ thao tác sửa văn bản của GTK. Undo/Redo Draft (`Ctrl+Z` / `Ctrl+Shift+Z`) và Enter/Shift+Enter/Esc của Search nằm trong nhóm tham khảo, không tùy chỉnh ở đây. Workspace shortcuts không xuyên qua dialog modal. Có thể dùng Ctrl/Alt/Super với một phím hoặc phím chức năng; không gán ký tự gõ thường, Shift-only ký tự hay Esc. Nếu tự gán phím của shell/TUI, action DevTerm có thể chiếm phím đó. Các phím desktop giữ lại (ví dụ chuyển virtual console) có thể không đến ứng dụng; DevTerm không kiểm tra hết được các xung đột này.
+
+Cấu hình nằm tại **`$XDG_CONFIG_HOME/devterm/shortcuts.json`**, fallback **`~/.config/devterm/shortcuts.json`** khi biến chưa đặt hoặc rỗng, độc lập với `commands.json` và `sessions.json`:
+
+```json
+{
+  "version": 1,
+  "bindings": {
+    "reconnect-pane": "<Control><Shift>y",
+    "copy-all": null
+  }
+}
+```
+
+Chỉ lưu phần khác mặc định; action vắng mặt dùng mặc định, `null` là chủ động bỏ gán. Dùng cú pháp accelerator GTK, tên action ổn định; không lưu tên hiển thị. JSON sai, version/action không hỗ trợ, giá trị sai hoặc phím trùng khiến toàn bộ file bị từ chối: ứng dụng dùng mặc định, báo lỗi và giữ nguyên file. **Restore Defaults & Back Up Invalid File → Apply** là thao tác khôi phục có chủ đích; tạo bản sao `shortcuts.json.invalid-<unique-id>.bak` trước khi ghi. Cancel không đổi file lỗi. Lưu atomic với đồng bộ xuống đĩa; lỗi ghi giữ nguyên bộ phím đang áp dụng. Nếu file đã đổi từ bên ngoài sau khi ứng dụng đọc, Apply từ chối ghi và yêu cầu khởi động lại để nạp lại.
 
 ## Draft: vùng nháp riêng trong từng tab
 
@@ -214,6 +256,8 @@ Lỗi split liên tiếp ép pane về mép đã được tái hiện bằng tes
 Kiểm tra giao diện search trên X11/Xvfb đã xác nhận phím mở search, query riêng giữa pane/tab, active pane cập nhật khi click vào ô search, Quick Commands vẫn gửi đúng pane và đóng pane an toàn khi search còn đang chờ. Một chương trình foreground đọc PTY ở raw mode xác nhận nội dung query, Enter, Shift+Enter và Esc không lọt vào child; sau khi đóng search, ký tự gõ tiếp đi vào đúng terminal.
 
 Copy/xuất nội dung đã được kiểm tra trên X11/Xvfb với clipboard và hộp thoại Save thực tế: đúng pane, UTF-8, giữ bản chụp trong khi output mới tiếp tục xuất hiện, lưu file và xác nhận ghi đè. Chương trình foreground đọc PTY ở raw mode xác nhận Copy All Text, mở/hủy Save không gửi input vào child và focus trở lại terminal sau khi hủy. Đo trích xuất khoảng 811 KB tại giới hạn scrollback mất khoảng 1,4 ms trên môi trường kiểm thử; đây không phải cam kết thời gian cho mọi kích thước buffer. Với hộp thoại Save modal, GTK có thể chặn yêu cầu đóng cửa sổ cha; nhánh đóng cửa sổ thực sự cũng đã được kiểm tra dưới debugger để xác nhận hủy hộp thoại và thoát bình thường.
+
+Phiên bản phím tắt tùy chỉnh: xem kết quả kiểm tra cập nhật ở [docs/SHORTCUTS-TESTING.md](docs/SHORTCUTS-TESTING.md). Hai nhóm mới `shortcuts` và `shortcuts-ui` kiểm tra cấu hình cùng ứng dụng GTK/VTE thật; nhóm GUI cần X11 và `xdotool`, tự báo skip nếu thiếu điều kiện. Các phím trong hướng dẫn sử dụng phía trên là bộ mặc định.
 
 Checklist kiểm tra thủ công trên hệ thống cài dependency bình thường:
 

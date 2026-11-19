@@ -8,6 +8,7 @@
 #include "ui-style.h"
 #include "devterm-version.h"
 #include "runtime.h"
+#include "shortcuts-ui.h"
 #include <gtk/gtk.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -25,7 +26,7 @@ struct TerminalTab {
 };
 struct App {
     GtkWidget *window, *workspace, *notebook, *quick_bar, *status;
-    GtkWidget *draft_button, *counts, *command_add, *command_manage;
+    GtkWidget *draft_button, *counts, *command_add, *command_manage, *empty_new;
     GtkCssProvider *style; /* Borrowed from GtkApplication; shared by windows. */
     GCancellable *export_cancel;
     GtkWidget *window_close_dialog;
@@ -37,6 +38,9 @@ struct App {
     TabStrip *tab_strip;
     QuickCommandsUI *quick_commands;
     SessionManager *sessions;
+    ShortcutSettings *shortcuts; /* Application-owned. */
+    GHashTable *pressed_shortcuts;
+    GtkWidget *shortcut_widgets[SC_COUNT];
 };
 
 static void on_new(GtkButton *button, gpointer data);
@@ -45,7 +49,8 @@ static void request_close_tab(TerminalTab *tab);
 static void on_draft_toggle(GtkToggleButton *button, gpointer data);
 static void sync_workspace(App *app) {
     gboolean active = app->active_tab != NULL;
-    const char *actions[] = {"split-right", "split-down", "find-in-pane", "close-pane", "close-tab", "copy-all", NULL};
+    const char *actions[] = {"split-right", "split-down", "find-in-pane", "close-pane", "close-tab", "copy-all", "reconnect-pane", "disconnect-pane", "next-pane", "previous-pane",
+        "pane-left", "pane-right", "pane-up", "pane-down", "rename-tab", "move-tab-left", "move-tab-right", "toggle-draft", NULL};
     for (int i = 0; actions[i]; i++)
         g_simple_action_set_enabled(G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(app->window), actions[i])), active);
     g_simple_action_set_enabled(G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(app->window), "export-text")), active && !app->export_cancel);
@@ -254,6 +259,7 @@ static void on_reconnect_ready(const SessionProfile *profile, const char *passwo
 }
 static void on_reconnect_request_done(gpointer data) {
     pane_finish_reconnect_request(data);
+    pane_focus(data);
     pane_unref(data);
 }
 static void reconnect_pane(App *app, TerminalPane *pane) {
@@ -432,24 +438,7 @@ static void on_quick_command(const QuickCommand *item, gpointer data) {
     pane_send(active, item->command, item->send_enter);
     status(app, item->send_enter ? "Command sent to selected pane" : "Command inserted in selected pane");
 }
-static void on_manage_response(GtkDialog *dialog, int response, gpointer data) {
-    (void)response; (void)data; gtk_window_destroy(GTK_WINDOW(dialog));
-}
-static void show_shortcuts(App *app) {
-    GtkWidget *dialog = gtk_dialog_new_with_buttons("Keyboard Shortcuts", GTK_WINDOW(app->window), GTK_DIALOG_MODAL, "Close", GTK_RESPONSE_CLOSE, NULL);
-    gtk_widget_add_css_class(dialog, "devterm-dialog"); gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
-    GtkWidget *grid = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(grid), 16); gtk_grid_set_column_spacing(GTK_GRID(grid), 32);
-    gtk_widget_set_margin_start(grid, 24); gtk_widget_set_margin_end(grid, 24); gtk_widget_set_margin_top(grid, 24); gtk_widget_set_margin_bottom(grid, 24);
-    const char *labels[] = {"New terminal tab", "Close tab", "Next tab", "Previous tab", "Find in selected pane", "Copy terminal selection", "Paste into terminal", "Undo in Draft", "Redo in Draft"};
-    const char *keys[] = {"<Control><Shift>t", "<Control><Shift>w", "<Control>Page_Down", "<Control>Page_Up", "<Control><Shift>f", "<Control><Shift>c", "<Control><Shift>v", "<Control>z", "<Control><Shift>z"};
-    for (guint i = 0; i < G_N_ELEMENTS(labels); i++) {
-        GtkWidget *label = gtk_label_new(labels[i]); gtk_widget_set_halign(label, GTK_ALIGN_START);
-        gtk_grid_attach(GTK_GRID(grid), label, 0, i, 1, 1);
-        gtk_grid_attach(GTK_GRID(grid), gtk_shortcut_label_new(keys[i]), 1, i, 1, 1);
-    }
-    gtk_box_append(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))), grid);
-    g_signal_connect(dialog, "response", G_CALLBACK(on_manage_response), NULL); gtk_window_present(GTK_WINDOW(dialog));
-}
+static void show_shortcuts(App *app) { shortcut_settings_show(app->shortcuts, GTK_WINDOW(app->window)); }
 static void action_workspace(GSimpleAction *action, GVariant *parameter, gpointer data) {
     (void)parameter; App *app = data; const char *name = g_action_get_name(G_ACTION(action));
     if (g_str_equal(name, "split-right")) on_split_right(NULL, app);
@@ -459,6 +448,74 @@ static void action_workspace(GSimpleAction *action, GVariant *parameter, gpointe
     else if (g_str_equal(name, "export-text")) on_export_text(NULL, app);
     else if (g_str_equal(name, "sessions")) on_sessions(NULL, app);
     else if (g_str_equal(name, "shortcuts")) show_shortcuts(app);
+    else if (g_str_equal(name, "reconnect-pane")) on_current_session(TRUE, app);
+    else if (g_str_equal(name, "disconnect-pane")) { on_current_session(FALSE, app); if (app->active_tab) split_layout_focus(app->active_tab->layout); }
+    else if (g_str_equal(name, "quick-manage")) quick_commands_ui_manage(app->quick_commands);
+    else if (g_str_equal(name, "quick-add")) quick_commands_ui_add(app->quick_commands);
+    else if (app->active_tab) {
+        TerminalTab *tab = app->active_tab;
+        if (g_str_equal(name, "next-pane") || g_str_equal(name, "previous-pane"))
+            split_layout_cycle(tab->layout, g_str_equal(name, "previous-pane"));
+        else if (g_str_equal(name, "pane-left")) split_layout_select_direction(tab->layout, GTK_DIR_LEFT);
+        else if (g_str_equal(name, "pane-right")) split_layout_select_direction(tab->layout, GTK_DIR_RIGHT);
+        else if (g_str_equal(name, "pane-up")) split_layout_select_direction(tab->layout, GTK_DIR_UP);
+        else if (g_str_equal(name, "pane-down")) split_layout_select_direction(tab->layout, GTK_DIR_DOWN);
+        else if (g_str_equal(name, "toggle-draft")) draft_set_visible(tab->draft, !draft_is_visible(tab->draft));
+        else if (g_str_equal(name, "rename-tab")) tab_strip_rename(app->tab_strip, tab->id);
+        else if (g_str_equal(name, "move-tab-left") || g_str_equal(name, "move-tab-right")) {
+            int index = gtk_notebook_page_num(GTK_NOTEBOOK(app->notebook), tab->page);
+            int target = index + (g_str_equal(name, "move-tab-left") ? -1 : 1);
+            if (target >= 0 && target < (int)app->tabs->len) gtk_notebook_reorder_child(GTK_NOTEBOOK(app->notebook), tab->page, target);
+        } else if (g_str_equal(name, "copy")) {
+            TerminalPane *pane = split_layout_active(tab->layout);
+            if (pane_terminal_has_focus(pane)) pane_copy_selection(pane);
+        } else if (g_str_equal(name, "paste")) {
+            TerminalPane *pane = split_layout_active(tab->layout);
+            if (pane_terminal_has_focus(pane)) pane_paste(pane);
+        }
+    }
+}
+/* Capture before VTE consumes input. Unmatched keys retain their normal GTK/PTY
+ * route; Copy/Paste are deliberately excluded while editing other widgets. */
+static gboolean workspace_has_modal(App *app) {
+    GListModel *windows = gtk_window_get_toplevels();
+    for (guint i = 0; i < g_list_model_get_n_items(windows); i++) {
+        GtkWindow *w = g_list_model_get_item(windows, i);
+        GtkWindow *parent = gtk_window_get_transient_for(w);
+        while (parent && gtk_window_get_transient_for(parent)) parent = gtk_window_get_transient_for(parent);
+        gboolean blocks = parent && gtk_window_get_application(parent) == gtk_window_get_application(GTK_WINDOW(app->window)) &&
+            gtk_window_get_modal(w) && gtk_widget_get_visible(GTK_WIDGET(w));
+        g_object_unref(w); if (blocks) return TRUE;
+    }
+    return FALSE;
+}
+static gboolean shortcut_event(GtkEventControllerLegacy *controller, GdkEvent *event, gpointer data) {
+    (void)controller; App *app = data;
+    GdkEventType type = gdk_event_get_event_type(event);
+    if (app->shutting_down || (type != GDK_KEY_PRESS && type != GDK_KEY_RELEASE)) return FALSE;
+    gpointer code = GUINT_TO_POINTER(gdk_key_event_get_keycode(event));
+    if (type == GDK_KEY_RELEASE) return g_hash_table_remove(app->pressed_shortcuts, code);
+    if (g_hash_table_contains(app->pressed_shortcuts, code)) return TRUE;
+    int id = shortcut_match_event(shortcut_settings_bindings(app->shortcuts), event);
+    if (id < 0) return FALSE;
+    const ShortcutDefinition *d = shortcut_definition(id);
+    TerminalPane *pane = app->active_tab ? split_layout_active(app->active_tab->layout) : NULL;
+    if (d->terminal_only && !pane_terminal_has_focus(pane)) return FALSE;
+    g_hash_table_add(app->pressed_shortcuts, code);
+    if (workspace_has_modal(app)) return TRUE;
+    GAction *action = g_action_map_lookup_action(G_ACTION_MAP(app->window), d->id);
+    if (action && g_action_get_enabled(action)) g_action_activate(action, NULL);
+    return TRUE;
+}
+static void shortcut_focus_left(GtkEventControllerFocus *controller, gpointer data) {
+    (void)controller; App *app = data; g_hash_table_remove_all(app->pressed_shortcuts);
+}
+static void on_shortcuts_changed(ShortcutSettings *settings, GtkWidget *window) {
+    App *app = g_object_get_data(G_OBJECT(window), "app");
+    if (!app || app->shutting_down) return;
+    if (app->empty_new) shortcut_settings_tooltip(settings, app->empty_new, SC_NEW_TAB, "New Terminal Tab");
+    for (int i = 0; i < SC_COUNT; i++) if (app->shortcut_widgets[i])
+        shortcut_settings_tooltip(settings, app->shortcut_widgets[i], i, shortcut_definition(i)->label);
 }
 static void action_appearance(GSimpleAction *action, GVariant *parameter, gpointer data) {
     (void)parameter; App *app = data; GVariant *state = g_action_get_state(G_ACTION(action));
@@ -538,12 +595,15 @@ static void app_free(gpointer data) {
     g_clear_object(&app->notebook);
     g_clear_object(&app->export_cancel);
     g_clear_pointer(&app->sessions, session_manager_free);
+    g_clear_pointer(&app->pressed_shortcuts, g_hash_table_unref);
     g_free(app);
 }
 static void activate(GtkApplication *application, gpointer data) {
     (void)data;
     App *app = g_new0(App, 1);
     app->tabs = g_ptr_array_new_with_free_func(tab_free);
+    app->pressed_shortcuts = g_hash_table_new(g_direct_hash, g_direct_equal);
+    app->shortcuts = shortcut_settings_get(application);
     app->window = gtk_application_window_new(application);
     gtk_window_set_icon_name(GTK_WINDOW(app->window), "com.example.DevTerm");
     g_object_set_data_full(G_OBJECT(app->window), "app", app, app_free);
@@ -562,14 +622,33 @@ static void activate(GtkApplication *application, gpointer data) {
         {.name = "export-text", .activate = action_workspace},
         {.name = "sessions", .activate = action_workspace},
         {.name = "shortcuts", .activate = action_workspace},
+        {.name = "reconnect-pane", .activate = action_workspace},
+        {.name = "disconnect-pane", .activate = action_workspace},
+        {.name = "next-pane", .activate = action_workspace},
+        {.name = "previous-pane", .activate = action_workspace},
+        {.name = "pane-left", .activate = action_workspace},
+        {.name = "pane-right", .activate = action_workspace},
+        {.name = "pane-up", .activate = action_workspace},
+        {.name = "pane-down", .activate = action_workspace},
+        {.name = "rename-tab", .activate = action_workspace},
+        {.name = "move-tab-left", .activate = action_workspace},
+        {.name = "move-tab-right", .activate = action_workspace},
+        {.name = "toggle-draft", .activate = action_workspace},
+        {.name = "quick-manage", .activate = action_workspace},
+        {.name = "quick-add", .activate = action_workspace},
+        {.name = "copy", .activate = action_workspace},
+        {.name = "paste", .activate = action_workspace},
         {.name = "dark-appearance", .activate = action_appearance, .state = "true"}
     };
     g_action_map_add_action_entries(G_ACTION_MAP(app->window), actions, G_N_ELEMENTS(actions), app);
-    gtk_application_set_accels_for_action(application, "win.new-tab", (const char *[]){"<Control><Shift>t", NULL});
-    gtk_application_set_accels_for_action(application, "win.close-tab", (const char *[]){"<Control><Shift>w", NULL});
-    gtk_application_set_accels_for_action(application, "win.find-in-pane", (const char *[]){"<Control><Shift>f", NULL});
-    gtk_application_set_accels_for_action(application, "win.next-tab", (const char *[]){"<Control>Page_Down", NULL});
-    gtk_application_set_accels_for_action(application, "win.previous-tab", (const char *[]){"<Control>Page_Up", NULL});
+    g_signal_connect_object(app->shortcuts, "changed", G_CALLBACK(on_shortcuts_changed), app->window, 0);
+    GtkEventController *shortcut_keys = gtk_event_controller_legacy_new();
+    gtk_event_controller_set_propagation_phase(shortcut_keys, GTK_PHASE_CAPTURE);
+    g_signal_connect(shortcut_keys, "event", G_CALLBACK(shortcut_event), app);
+    gtk_widget_add_controller(app->window, shortcut_keys);
+    GtkEventController *shortcut_focus = gtk_event_controller_focus_new();
+    g_signal_connect(shortcut_focus, "leave", G_CALLBACK(shortcut_focus_left), app);
+    gtk_widget_add_controller(app->window, shortcut_focus);
     gtk_window_set_title(GTK_WINDOW(app->window), "DevTerm");
     gtk_window_set_default_size(GTK_WINDOW(app->window), 1200, 800);
     gtk_widget_set_size_request(app->window, 760, 480);
@@ -619,6 +698,8 @@ static void activate(GtkApplication *application, gpointer data) {
     gtk_box_append(GTK_BOX(tools), app->draft_button);
     GMenu *pane_menu = g_menu_new(), *text_menu = g_menu_new(), *close_menu = g_menu_new();
     g_menu_append(text_menu, "Copy All Text", "win.copy-all"); g_menu_append(text_menu, "Export Text…", "win.export-text");
+    g_menu_append(text_menu, "Reconnect Current Pane", "win.reconnect-pane");
+    g_menu_append(text_menu, "Disconnect Current Pane", "win.disconnect-pane");
     g_menu_append(close_menu, "Close Pane", "win.close-pane"); g_menu_append(close_menu, "Close Tab", "win.close-tab");
     g_menu_append_section(pane_menu, "Selected pane", G_MENU_MODEL(text_menu)); g_menu_append_section(pane_menu, NULL, G_MENU_MODEL(close_menu));
     GtkWidget *pane_more = gtk_menu_button_new(); gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(pane_more), "view-more-symbolic");
@@ -648,7 +729,7 @@ static void activate(GtkApplication *application, gpointer data) {
     gtk_box_append(GTK_BOX(empty), empty_icon);
     GtkWidget *empty_title = gtk_label_new("A fresh workspace"); gtk_widget_add_css_class(empty_title, "empty-title"); gtk_box_append(GTK_BOX(empty), empty_title);
     GtkWidget *empty_hint = gtk_label_new("Start a local terminal or connect to a saved session."); gtk_widget_add_css_class(empty_hint, "muted"); gtk_box_append(GTK_BOX(empty), empty_hint);
-    GtkWidget *empty_new = ui_button("list-add-symbolic", "New Terminal", "New terminal tab (Ctrl+Shift+T)"); gtk_widget_add_css_class(empty_new, "primary");
+    GtkWidget *empty_new = app->empty_new = ui_button("list-add-symbolic", "New Terminal", "New terminal tab (Ctrl+Shift+T)"); gtk_widget_add_css_class(empty_new, "primary");
     g_signal_connect(empty_new, "clicked", G_CALLBACK(on_new), app);
     gtk_box_append(GTK_BOX(empty), empty_new);
     gtk_stack_add_named(GTK_STACK(app->workspace), empty, "empty");
@@ -683,7 +764,17 @@ static void activate(GtkApplication *application, gpointer data) {
         on_quick_command, on_quick_status, app);
     char *config_error = g_strdup(quick_commands_ui_load_error(app->quick_commands));
     app->sessions = session_manager_new(GTK_WINDOW(app->window), on_session_connect, on_current_session, app);
+    app->shortcut_widgets[SC_NEW_TAB] = new_button;
+    app->shortcut_widgets[SC_SESSIONS] = sessions;
+    app->shortcut_widgets[SC_SPLIT_RIGHT] = split_right;
+    app->shortcut_widgets[SC_SPLIT_DOWN] = split_down;
+    app->shortcut_widgets[SC_FIND] = search;
+    app->shortcut_widgets[SC_DRAFT] = app->draft_button;
+    app->shortcut_widgets[SC_QUICK_ADD] = app->command_add;
+    app->shortcut_widgets[SC_QUICK_MANAGE] = app->command_manage;
+    on_shortcuts_changed(app->shortcuts, app->window);
     on_new(NULL, app);
+    if (shortcut_settings_error(app->shortcuts)) status(app, shortcut_settings_error(app->shortcuts));
     if (config_error) { status(app, config_error); g_free(config_error); }
     gtk_window_present(GTK_WINDOW(app->window));
     schedule_focus(app);

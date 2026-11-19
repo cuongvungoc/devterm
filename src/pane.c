@@ -211,16 +211,6 @@ static void on_focus(GtkEventControllerFocus *controller, gpointer data) {
     if (!p->closed && p->selected) p->selected(p, NULL, p->user_data);
 }
 
-static void on_copy(GtkWidget *widget, const char *name, GVariant *parameter, gpointer data) {
-    (void)widget; (void)name; (void)parameter;
-    vte_terminal_copy_clipboard_format(VTE_TERMINAL(data), VTE_FORMAT_TEXT);
-}
-
-static void on_paste(GtkWidget *widget, const char *name, GVariant *parameter, gpointer data) {
-    (void)widget; (void)name; (void)parameter;
-    vte_terminal_paste_clipboard(VTE_TERMINAL(data));
-}
-
 static void search_cancel_timeout(TerminalPane *p) {
     if (p->search_timeout) { g_source_remove(p->search_timeout); p->search_timeout = 0; }
 }
@@ -576,20 +566,6 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     g_signal_connect(p->terminal, "child-exited", G_CALLBACK(on_child_exit), p);
     g_signal_connect(p->terminal, "map", G_CALLBACK(on_search_map), p);
 
-    GSimpleActionGroup *actions = g_simple_action_group_new();
-    GSimpleAction *copy = g_simple_action_new("copy", NULL);
-    GSimpleAction *paste = g_simple_action_new("paste", NULL);
-    g_signal_connect(copy, "activate", G_CALLBACK(on_copy), p->terminal);
-    g_signal_connect(paste, "activate", G_CALLBACK(on_paste), p->terminal);
-    g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(copy));
-    g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(paste));
-    gtk_widget_insert_action_group(GTK_WIDGET(p->terminal), "term", G_ACTION_GROUP(actions));
-    g_object_unref(copy); g_object_unref(paste); g_object_unref(actions);
-    GtkShortcutController *shortcuts = GTK_SHORTCUT_CONTROLLER(gtk_shortcut_controller_new());
-    gtk_shortcut_controller_add_shortcut(shortcuts, gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_c, GDK_CONTROL_MASK | GDK_SHIFT_MASK), gtk_named_action_new("term.copy")));
-    gtk_shortcut_controller_add_shortcut(shortcuts, gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_v, GDK_CONTROL_MASK | GDK_SHIFT_MASK), gtk_named_action_new("term.paste")));
-    gtk_widget_add_controller(GTK_WIDGET(p->terminal), GTK_EVENT_CONTROLLER(shortcuts));
-
     if (profile) {
         GError *error = NULL;
         int fd = session_launch_fd(profile, password, &error);
@@ -663,6 +639,15 @@ void pane_set_active(TerminalPane *p, gboolean active) {
     else gtk_widget_remove_css_class(p->root, "active-pane");
 }
 void pane_focus(TerminalPane *p) { if (!p->closed) gtk_widget_grab_focus(GTK_WIDGET(p->terminal)); }
+gboolean pane_terminal_has_focus(TerminalPane *p) {
+    return p && !p->closed && gtk_widget_has_focus(GTK_WIDGET(p->terminal));
+}
+void pane_copy_selection(TerminalPane *p) {
+    if (p && !p->closed) vte_terminal_copy_clipboard_format(p->terminal, VTE_FORMAT_TEXT);
+}
+void pane_paste(TerminalPane *p) {
+    if (pane_is_running(p)) vte_terminal_paste_clipboard(p->terminal);
+}
 void pane_search_open(TerminalPane *p) {
     if (!p || p->closed) return;
     if (p->selected) p->selected(p, NULL, p->user_data);

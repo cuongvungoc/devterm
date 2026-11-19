@@ -228,3 +228,37 @@ static guint count(LayoutNode *node, gboolean live_only) {
 }
 guint split_layout_pane_count(SplitLayout *layout) { return layout ? count(layout->tree, FALSE) : 0; }
 guint split_layout_live_sessions(SplitLayout *layout) { return layout ? count(layout->tree, TRUE) : 0; }
+
+static void collect_leaves(LayoutNode *node, GPtrArray *panes) {
+    if (!node) return;
+    if (node->pane) g_ptr_array_add(panes, node->pane);
+    else { collect_leaves(node->first, panes); collect_leaves(node->second, panes); }
+}
+void split_layout_cycle(SplitLayout *layout, gboolean previous) {
+    if (!layout || !layout->active) return;
+    GPtrArray *panes = g_ptr_array_new(); collect_leaves(layout->tree, panes);
+    for (guint i = 0; i < panes->len; i++) if (panes->pdata[i] == layout->active) {
+        guint target = (i + panes->len + (previous ? -1 : 1)) % panes->len;
+        set_active(layout, panes->pdata[target]); split_layout_focus(layout); break;
+    }
+    g_ptr_array_unref(panes);
+}
+void split_layout_select_direction(SplitLayout *layout, GtkDirectionType direction) {
+    if (!layout || !layout->active) return;
+    graphene_rect_t current;
+    if (!gtk_widget_compute_bounds(pane_widget(layout->active), layout->widget, &current)) return;
+    GPtrArray *panes = g_ptr_array_new(); collect_leaves(layout->tree, panes);
+    TerminalPane *best = NULL; double score = G_MAXDOUBLE;
+    for (guint i = 0; i < panes->len; i++) {
+        TerminalPane *pane = panes->pdata[i]; graphene_rect_t bounds;
+        if (pane == layout->active || !gtk_widget_compute_bounds(pane_widget(pane), layout->widget, &bounds)) continue;
+        double dx = bounds.origin.x + bounds.size.width / 2 - current.origin.x - current.size.width / 2;
+        double dy = bounds.origin.y + bounds.size.height / 2 - current.origin.y - current.size.height / 2;
+        double forward = direction == GTK_DIR_LEFT ? -dx : direction == GTK_DIR_RIGHT ? dx : direction == GTK_DIR_UP ? -dy : dy;
+        double side = direction == GTK_DIR_LEFT || direction == GTK_DIR_RIGHT ? dy : dx;
+        double candidate = forward * forward + 4 * side * side;
+        if (forward > 1 && candidate < score) { best = pane; score = candidate; }
+    }
+    if (best) { set_active(layout, best); split_layout_focus(layout); }
+    g_ptr_array_unref(panes);
+}

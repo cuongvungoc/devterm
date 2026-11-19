@@ -10,3 +10,6 @@ QuickCommandsUI *quick_commands_ui_new(GtkWindow *parent, GtkFlowBox *bar, GtkSc
 const char *quick_commands_ui_load_error(QuickCommandsUI *ui);
 /* Close dialogs/cancel drags before freeing the parent application state. */
 void quick_commands_ui_free(QuickCommandsUI *ui);
+
+void quick_commands_ui_manage(QuickCommandsUI *ui);
+void quick_commands_ui_add(QuickCommandsUI *ui);

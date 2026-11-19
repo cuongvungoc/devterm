@@ -325,3 +325,5 @@ void tab_strip_free(TabStrip *s) {
     while (g_hash_table_iter_next(&iter, NULL, &value)) g_signal_handlers_disconnect_by_data(((TabEntry *)value)->close, s);
     g_hash_table_unref(s->entries); g_object_unref(s->actions); g_object_unref(s->notebook); g_free(s);
 }
+
+void tab_strip_rename(TabStrip *s, guint id) { if (s && !s->closing && lookup(s, id)) show_rename(s, id); }

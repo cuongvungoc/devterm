@@ -19,3 +19,6 @@ void split_layout_split(SplitLayout *layout, GtkOrientation orientation);
 void split_layout_close_active(SplitLayout *layout);
 guint split_layout_pane_count(SplitLayout *layout);
 guint split_layout_live_sessions(SplitLayout *layout);
+
+void split_layout_cycle(SplitLayout *layout, gboolean previous);
+void split_layout_select_direction(SplitLayout *layout, GtkDirectionType direction);

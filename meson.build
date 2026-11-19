@@ -1,4 +1,4 @@
-project('devterm', 'c', version: '0.3.0', default_options: ['c_std=c11', 'warning_level=2'])
+project('devterm', 'c', version: '0.4.0', default_options: ['c_std=c11', 'warning_level=2'])
 
 version_config = configuration_data()
 version_config.set_quoted('DEVTERM_VERSION', meson.project_version())
@@ -23,7 +23,7 @@ runtime_src = []
 if get_option('bundled_runtime')
     runtime_src = files('src/runtime.c')
 endif
-app_src = ['src/tab-strip.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src]
+app_src = ['src/shortcuts.c', 'src/shortcuts-ui.c', 'src/tab-strip.c', 'src/quick-commands-ui.c', 'src/ui-style.c', ui_resources, 'src/draft.c', 'src/confirm-dialog.c', 'src/text-export.c', 'src/sessions-ui.c', 'src/credentials.c', terminal_src, src, runtime_src]
 executable('devterm', ['src/main.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret], install: true)
 executable('devterm-connect', ['src/connect-helper.c', 'src/sessions.c', 'src/login.c', runtime_src], dependencies: [gtk, json, gio, util], install: true)
 test_exe = executable('test-commands', ['tests/test-commands.c', src], dependencies: [json, gio])
@@ -54,3 +54,8 @@ host_key_test = executable('test-host-key', ['tests/test-host-key.c', 'src/ssh-h
 test('host-key', host_key_test, env: ['G_DEBUG=fatal-criticals'], timeout: 45)
 host_key_ui_test = executable('test-host-key-ui', ['tests/test-host-key-ui.c', terminal_src, 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk, vte, gio, json, pcre])
 test('host-key-ui', host_key_ui_test, env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)
+
+shortcuts_test = executable('test-shortcuts', ['tests/test-shortcuts.c', 'src/shortcuts.c'], dependencies: [gtk, json, gio])
+test('shortcuts', shortcuts_test, env: ['G_DEBUG=fatal-criticals'], timeout: 30)
+shortcuts_ui_test = executable('test-shortcuts-ui', ['tests/test-shortcuts-ui.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret])
+test('shortcuts-ui', find_program('dbus-run-session'), args: ['--', shortcuts_ui_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple', 'GDK_BACKEND=x11'], is_parallel: false, timeout: 90)

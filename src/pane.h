@@ -24,6 +24,9 @@ gboolean pane_is_reconnecting(TerminalPane *pane);
 GtkWidget *pane_widget(TerminalPane *pane);
 void pane_set_active(TerminalPane *pane, gboolean active);
 void pane_focus(TerminalPane *pane);
+gboolean pane_terminal_has_focus(TerminalPane *pane);
+void pane_copy_selection(TerminalPane *pane);
+void pane_paste(TerminalPane *pane);
 void pane_search_open(TerminalPane *pane);
 /* Snapshot the current screen buffer, including retained scrollback. GTK thread only. */
 GBytes *pane_snapshot_text(TerminalPane *pane, GError **error);

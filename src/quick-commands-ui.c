@@ -534,3 +534,6 @@ void quick_commands_ui_free(QuickCommandsUI *ui) {
     g_object_unref(ui->quick_bar); g_object_unref(ui->quick_scroll); g_object_unref(ui->command_add); g_object_unref(ui->command_manage);
     g_free(ui->config_path); g_free(ui->load_error); g_free(ui->drag_id); g_free(ui->focus_id); g_free(ui);
 }
+
+void quick_commands_ui_manage(QuickCommandsUI *ui) { if (ui && !ui->closing && ui->config_valid) on_manage(NULL, ui); }
+void quick_commands_ui_add(QuickCommandsUI *ui) { if (ui && !ui->closing && ui->config_valid) on_add(NULL, ui); }

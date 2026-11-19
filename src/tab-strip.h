@@ -12,3 +12,5 @@ void tab_strip_remove(TabStrip *strip, guint id);
 /* Prevent notebook's temporary focus from replacing the remembered pane/Draft. */
 gboolean tab_strip_busy(TabStrip *strip);
 void tab_strip_free(TabStrip *strip);
+
+void tab_strip_rename(TabStrip *strip, guint id);
