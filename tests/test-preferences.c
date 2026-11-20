@@ -5,20 +5,33 @@ static char *root, *path;
 static void test_round_trip(void) {
     Preferences *preferences = preferences_load(path, NULL);
     g_assert_nonnull(preferences); g_assert_true(preferences->confirm_close_sessions);
+    g_assert_cmpint(preferences->appearance, ==, PREFERENCES_APPEARANCE_DARK);
     preferences->confirm_close_sessions = FALSE;
+    preferences->appearance = PREFERENCES_APPEARANCE_LIGHT;
     g_assert_true(preferences_save(path, preferences, NULL)); g_free(preferences);
     preferences = preferences_load(path, NULL); g_assert_nonnull(preferences);
     g_assert_false(preferences->confirm_close_sessions);
+    g_assert_cmpint(preferences->appearance, ==, PREFERENCES_APPEARANCE_LIGHT);
     GStatBuf info; g_assert_cmpint(g_stat(path, &info), ==, 0); g_assert_cmpint(info.st_mode & 0777, ==, 0600);
     preferences->confirm_close_sessions = TRUE;
     g_assert_true(preferences_save(path, preferences, NULL)); g_free(preferences);
-    preferences = preferences_load(path, NULL); g_assert_true(preferences->confirm_close_sessions); g_free(preferences);
+    preferences = preferences_load(path, NULL); g_assert_true(preferences->confirm_close_sessions);
+    g_assert_cmpint(preferences->appearance, ==, PREFERENCES_APPEARANCE_LIGHT);
+    preferences->appearance = PREFERENCES_APPEARANCE_DARK;
+    g_assert_true(preferences_save(path, preferences, NULL)); g_free(preferences);
+    preferences = preferences_load(path, NULL); g_assert_true(preferences->confirm_close_sessions);
+    g_assert_cmpint(preferences->appearance, ==, PREFERENCES_APPEARANCE_DARK); g_free(preferences);
     g_remove(path);
 }
 static void test_invalid_is_preserved(void) {
     const char *invalid[] = {"", "{broken", "null", "[]", "{}", "{\"version\":2,\"confirm_close_sessions\":false}",
-        "{\"version\":1,\"confirm_close_sessions\":\"false\"}", "{\"version\":1.0,\"confirm_close_sessions\":true}"};
-    Preferences preferences = {TRUE};
+        "{\"version\":1,\"confirm_close_sessions\":\"false\"}", "{\"version\":1.0,\"confirm_close_sessions\":true}",
+        "{\"version\":1,\"confirm_close_sessions\":true,\"appearance\":null}",
+        "{\"version\":1,\"confirm_close_sessions\":true,\"appearance\":true}",
+        "{\"version\":1,\"confirm_close_sessions\":true,\"appearance\":1}",
+        "{\"version\":1,\"confirm_close_sessions\":true,\"appearance\":{}}",
+        "{\"version\":1,\"confirm_close_sessions\":true,\"appearance\":\"system\"}"};
+    Preferences preferences = {.confirm_close_sessions = TRUE};
     for (guint i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_assert_true(g_file_set_contents(path, invalid[i], -1, NULL)); GError *error = NULL;
         g_assert_null(preferences_load(path, &error)); g_assert_nonnull(error); g_clear_error(&error);
@@ -29,7 +42,7 @@ static void test_invalid_is_preserved(void) {
     g_remove(path);
 }
 static void test_external_change_and_write_failure(void) {
-    Preferences original = {FALSE}, changed = {TRUE};
+    Preferences original = {.confirm_close_sessions = FALSE}, changed = {.confirm_close_sessions = TRUE};
     g_assert_true(preferences_save(path, &original, NULL));
     g_assert_true(g_file_set_contents(path, "externally damaged", -1, NULL));
     g_assert_false(preferences_save(path, &changed, NULL));
@@ -38,6 +51,16 @@ static void test_external_change_and_write_failure(void) {
     g_assert_true(g_file_set_contents(file, "regular file", -1, NULL)); GError *error = NULL;
     g_assert_false(preferences_save(child, &changed, &error)); g_assert_nonnull(error); g_clear_error(&error);
     g_assert_true(changed.confirm_close_sessions); g_remove(file); g_free(child); g_free(file);
+}
+static void test_legacy_upgrade(void) {
+    g_assert_true(g_file_set_contents(path, "{\"version\":1,\"confirm_close_sessions\":false}", -1, NULL));
+    Preferences *preferences = preferences_load(path, NULL); g_assert_nonnull(preferences);
+    g_assert_false(preferences->confirm_close_sessions);
+    g_assert_cmpint(preferences->appearance, ==, PREFERENCES_APPEARANCE_DARK);
+    preferences->appearance = PREFERENCES_APPEARANCE_LIGHT;
+    g_assert_true(preferences_save(path, preferences, NULL)); g_free(preferences);
+    preferences = preferences_load(path, NULL); g_assert_false(preferences->confirm_close_sessions);
+    g_assert_cmpint(preferences->appearance, ==, PREFERENCES_APPEARANCE_LIGHT); g_free(preferences); g_remove(path);
 }
 static void test_xdg_path(void) {
     g_setenv("XDG_CONFIG_HOME", root, TRUE); char *actual = preferences_config_path();
@@ -56,5 +79,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/preferences/invalid-preserved", test_invalid_is_preserved);
     g_test_add_func("/preferences/external-change-write-failure", test_external_change_and_write_failure);
     g_test_add_func("/preferences/xdg", test_xdg_path);
+    g_test_add_func("/preferences/legacy-upgrade", test_legacy_upgrade);
     int result = g_test_run(); g_rmdir(directory); g_rmdir(root); g_free(path); g_free(directory); g_free(root); return result;
 }

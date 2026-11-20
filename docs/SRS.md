@@ -215,7 +215,7 @@ Serial cho phép cấu hình baud 50–4.000.000, data bits 5–8, stop bits 1�
 | ID | Yêu cầu | Điều kiện nghiệm thu |
 | --- | --- | --- |
 | FR-UI-01 | Giao diện phải có header New Terminal/Sessions, toolbar workspace, thanh tab, Quick Commands và trạng thái. | Pane actions khóa khi workspace rỗng; số tab/pane phản ánh tab hiện tại; command tự xuống hàng/cuộn khi không đủ chỗ. |
-| FR-UI-02 | Phải có sáng/tối và danh sách phím tắt; theme đồng bộ trong cùng tiến trình. | Menu ứng dụng chuyển Dark appearance; terminal vẫn tối; lựa chọn theme hiện chỉ giữ trong phiên, không lưu xuống đĩa. |
+| FR-UI-02 | Phải có sáng/tối và danh sách phím tắt; theme đồng bộ giữa các cửa sổ và được giữ qua các lần chạy. | Menu ứng dụng chuyển Dark appearance; lưu ngay vào preferences.json, áp dụng trước lần hiển thị đầu; file cũ thiếu appearance dùng Dark. Lỗi lưu báo rõ và giữ theme/checkbox đang dùng; terminal vẫn tối. |
 | FR-UI-03 | Các dialog Sessions/Manage/Sequence/Shortcuts phải ưu tiên diện tích danh sách, cho resize/maximize và nhớ kích thước trong RAM. | Giới hạn khi mở trên màn hình nhỏ; nút cuối ngoài vùng cuộn; hàng đọc được với font hệ thống; Sessions bố trí ổn định ngay từ khung hình đầu, reflow giữ lựa chọn/focus; Add/Edit Command và Sequence dùng chung khung và bộ nhớ kích thước, đổi Type giữ vị trí Type/Name/Save/Cancel và nội dung đang nhập; thêm/di chuyển bước được cuộn vào vùng nhìn thấy. Trợ giúp mở được bằng bàn phím, lỗi/xung đột hiển thị trực tiếp. |
 | FR-UI-04 | Định danh pane phải ổn định và quy tắc đóng session nhất quán ở pane/tab/cửa sổ. | Title không bị tiến độ/lỗi thay thế; footer ghi nguồn pane; Cancel mặc định, đóng đúng pane đã xác nhận; preference mặc định bật được lưu và đồng bộ các cửa sổ, lỗi JSON không bị ghi đè; Draft luôn được bảo vệ. |
 
@@ -287,7 +287,7 @@ Output mới không được thêm vào snapshot đang chờ. Hủy hoặc lỗi
 | Export | File local người dùng chọn | Đến khi người dùng xóa | Snapshot UTF-8, không màu |
 | SSH host keys | File hiệu lực do OpenSSH xác định | Theo cấu hình SSH | Chỉ sửa trong luồng xác nhận; backup cạnh file |
 | Xác nhận đóng session | `$XDG_CONFIG_HOME/devterm/preferences.json` | Qua các lần chạy | Version 1, boolean; mặc định true, Draft không phụ thuộc tùy chọn |
-| Theme | Trạng thái UI trong tiến trình | Phiên chạy | Không có setting persistence |
+| Theme | `$XDG_CONFIG_HOME/devterm/preferences.json` | Qua các lần chạy | Version 1, appearance: light/dark; mặc định Dark, không đổi palette terminal |
 
 Nếu `XDG_CONFIG_HOME` không thiết lập hoặc rỗng, hai JSON fallback về `~/.config/devterm/`. File chưa tồn tại tương ứng danh sách rỗng. JSON sai cú pháp/schema/version/ID phải được giữ nguyên và báo lỗi; lỗi Quick Commands không được ngăn terminal local hoạt động, lỗi Sessions không được ngăn Quick Commands hoặc terminal.
 

@@ -1,4 +1,4 @@
-project('devterm', 'c', version: '0.6.0', default_options: ['c_std=c11', 'warning_level=2'])
+project('devterm', 'c', version: '0.7.0', default_options: ['c_std=c11', 'warning_level=2'])
 
 version_config = configuration_data()
 version_config.set_quoted('DEVTERM_VERSION', meson.project_version())
@@ -53,6 +53,8 @@ quick_ui_test = executable('test-quick-ui', ['tests/test-quick-ui.c', dialog_src
 test('quick-ui', quick_ui_test, env: ['G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)
 tabs_test = executable('test-tabs', ['tests/test-tabs.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret])
 test('tabs', find_program('dbus-run-session'), args: ['--', tabs_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 45)
+appearance_test = executable('test-appearance', ['tests/test-appearance.c', app_src], dependencies: [gtk, vte, json, gio, pcre, secret])
+test('appearance', find_program('dbus-run-session'), args: ['--', appearance_test], env: ['SHELL=/bin/sh', 'G_DEBUG=fatal-criticals', 'GTK_IM_MODULE=simple'], is_parallel: false, timeout: 60)
 host_key_test = executable('test-host-key', ['tests/test-host-key.c', 'src/ssh-host-key.c', 'src/sessions.c'], dependencies: [gio, json])
 test('host-key', host_key_test, env: ['G_DEBUG=fatal-criticals'], timeout: 45)
 host_key_ui_test = executable('test-host-key-ui', ['tests/test-host-key-ui.c', terminal_src, 'src/draft.c', 'src/confirm-dialog.c'], dependencies: [gtk, vte, gio, json, pcre])

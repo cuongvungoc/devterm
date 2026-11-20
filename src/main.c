@@ -565,9 +565,19 @@ static void on_shortcuts_changed(ShortcutSettings *settings, GtkWidget *window) 
         shortcut_settings_tooltip(settings, app->shortcut_widgets[i], i, shortcut_definition(i)->label);
 }
 static void action_appearance(GSimpleAction *action, GVariant *parameter, gpointer data) {
-    (void)parameter; App *app = data; GVariant *state = g_action_get_state(G_ACTION(action));
-    gboolean dark = !g_variant_get_boolean(state); g_variant_unref(state);
+    (void)action; (void)parameter; App *app = data;
+    Preferences next = *app->preferences;
+    next.appearance = next.appearance == PREFERENCES_APPEARANCE_DARK ? PREFERENCES_APPEARANCE_LIGHT : PREFERENCES_APPEARANCE_DARK;
+    char *path = preferences_config_path(); GError *error = NULL;
+    if (!preferences_save(path, &next, &error)) {
+        GtkAlertDialog *alert = gtk_alert_dialog_new("Cannot save appearance preference");
+        gtk_alert_dialog_set_detail(alert, error->message); gtk_alert_dialog_show(alert, GTK_WINDOW(app->window));
+        g_object_unref(alert); status(app, error->message); g_clear_error(&error); g_free(path); return;
+    }
+    g_free(path); *app->preferences = next;
+    gboolean dark = next.appearance == PREFERENCES_APPEARANCE_DARK;
     GtkApplication *application = gtk_window_get_application(GTK_WINDOW(app->window));
+    g_object_set_data(G_OBJECT(application), "preferences-error", NULL);
     for (GList *item = gtk_application_get_windows(application); item; item = item->next) {
         if (!G_IS_ACTION_MAP(item->data)) continue;
         GAction *appearance = g_action_map_lookup_action(G_ACTION_MAP(item->data), "dark-appearance");
@@ -581,7 +591,7 @@ static Preferences *application_preferences(GtkApplication *application) {
     char *path = preferences_config_path(); GError *error = NULL; preferences = preferences_load(path, &error);
     if (!preferences) {
         preferences = g_new0(Preferences, 1); preferences->confirm_close_sessions = TRUE;
-        char *message = g_strdup_printf("Cannot load %s: %s. Close confirmation remains enabled; the file has been preserved.", path, error->message);
+        char *message = g_strdup_printf("Cannot load %s: %s. Using default dark appearance and close confirmation; the file has been preserved.", path, error->message);
         g_object_set_data_full(G_OBJECT(application), "preferences-error", message, g_free); g_clear_error(&error);
     }
     g_free(path); g_object_set_data_full(G_OBJECT(application), "preferences", preferences, g_free); return preferences;
@@ -742,11 +752,10 @@ static void activate(GtkApplication *application, gpointer data) {
     gtk_widget_add_css_class(app->window, "devterm-window");
     app->style = g_object_get_data(G_OBJECT(application), "ui-style");
     if (!app->style) {
-        app->style = ui_style_install(gtk_widget_get_display(app->window), TRUE);
+        app->style = ui_style_install(gtk_widget_get_display(app->window), app->preferences->appearance == PREFERENCES_APPEARANCE_DARK);
         g_object_set_data_full(G_OBJECT(application), "ui-style", app->style, (GDestroyNotify)ui_style_uninstall);
     }
-    gboolean dark;
-    g_object_get(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", &dark, NULL);
+    gboolean dark = app->preferences->appearance == PREFERENCES_APPEARANCE_DARK;
     g_simple_action_set_state(G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(app->window), "dark-appearance")), g_variant_new_boolean(dark));
     GtkWidget *header = gtk_header_bar_new();
     GtkWidget *brand = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8), *brand_icon = ui_icon("utilities-terminal-symbolic");

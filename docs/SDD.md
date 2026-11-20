@@ -202,7 +202,9 @@ Sessions dùng container height-for-width cho hai nhãn: chọn bố cục trong
 
 `TerminalPane` giữ title bất biến `Pane N · profile/Terminal`, message riêng và label trạng thái ellipsize có tooltip. Title tooltip chứa endpoint/thư mục ban đầu; ID tăng trong tiến trình, không phải layout persistence. Sequence/error/exit/reconnect chỉ đổi message; trạng thái spawn của client là `Session running`, không khẳng định remote đã xác thực. `SplitLayout` thêm title vào thông báo trước khi chuyển cho App; khi chọn pane, phát lại message đang giữ của pane đó.
 
-`preferences.c` đọc/ghi `preferences.json` version 1 với boolean `confirm_close_sessions`; default true khi thiếu file. JSON lỗi/schema/version sai được giữ nguyên, App dùng true và báo lỗi. Save đọc lại file trước khi ghi, tạo thư mục 0700 và ghi atomic/durable file mới 0600; chỉ cập nhật model/GAction sau lưu thành công. Model thuộc GtkApplication, mọi cửa sổ dùng cùng instance và đồng bộ GAction check state. Draft không phụ thuộc preference này.
+`preferences.c` đọc/ghi `preferences.json` version 1 với boolean `confirm_close_sessions` và trường tùy chọn `appearance` (`light`/`dark`); mặc định true/Dark khi thiếu file, file cũ thiếu appearance dùng Dark. JSON lỗi/schema/version hoặc appearance sai được giữ nguyên, App dùng mặc định và báo lỗi. Save đọc lại file trước khi ghi, tạo thư mục 0700 và ghi atomic/durable file mới 0600, luôn ghi cả hai tùy chọn; chỉ cập nhật model/GAction/CSS sau lưu thành công. Model thuộc GtkApplication, mọi cửa sổ dùng cùng instance và đồng bộ GAction check state. Draft không phụ thuộc preference đóng session.
+
+Theme được đọc trước khi tạo cửa sổ và truyền vào `ui_style_install()` trước lần present đầu; provider CSS chung cho GtkApplication và GtkSettings trong ứng dụng được áp dụng cùng lúc. Cửa sổ mới lấy state từ model, không đặt lại Dark. Lỗi lưu theme hiện alert và giữ nguyên theme/checkbox ở mọi cửa sổ. Không thay theme desktop hay palette tối của VTE. Nhóm `appearance` dùng tiến trình con mới để kiểm tra theme ở map/after-paint đầu và kiểm tra cả hướng Light/Dark, đồng bộ nhiều cửa sổ, file cũ và lỗi lưu.
 
 ## 5. Thiết kế terminal, tab và split
 
@@ -557,7 +559,7 @@ Parser yêu cầu các field trong ví dụ và đúng JSON type; **bất kỳ p
 
 ### 11.4. Dữ liệu chỉ nằm trong RAM
 
-Tên/thứ tự tab, cây split, active pane, Draft và undo stack, query/options Search, theme và output VTE không có schema persistence. Không ghi những dữ liệu này vào `commands.json` hoặc `sessions.json`. Export và backup host key là hai loại file được tạo qua hành động riêng của người dùng.
+Tên/thứ tự tab, cây split, active pane, Draft và undo stack, query/options Search và output VTE không có schema persistence. Không ghi những dữ liệu này vào `commands.json` hoặc `sessions.json`. Theme được lưu riêng trong `preferences.json`. Export và backup host key là hai loại file được tạo qua hành động riêng của người dùng.
 
 ## 12. Build, đóng gói và triển khai
 
@@ -650,7 +652,7 @@ Một nhóm test có thể chỉ kiểm một phần yêu cầu; cột thủ cô
 | FR-SESSION-06–07 | Pane reconnect state/captured profile | `reconnect`, `host-key-ui` | Remote session mới, stop chậm, đổi tab khi chờ password |
 | FR-SESSION-08 | Credentials/schema/endpoint/sealed launch fd | `sessions`, `session-ui`, `connections` | Keyring desktop locked/unavailable, vòng đời upgrade |
 | FR-HOST-01–05 | Private notice/SSH diagnostics/review/backup/etag | `connections`, `host-key`, `host-key-ui` | Xác minh fingerprint độc lập và cấu hình OpenSSH máy thật |
-| FR-UI-01–04 | Main actions/style/resources/DialogLayout/Preferences | `dialog-layout`, `preferences`, `tabs`, `quick-ui`, `draft`, `shortcuts-ui`, `session-ui` | Theme nhiều cửa sổ, keyboard, font lớn, 800×650/1200×800 |
+| FR-UI-01–04 | Main actions/style/resources/DialogLayout/Preferences | `dialog-layout`, `preferences`, `appearance`, `tabs`, `quick-ui`, `draft`, `shortcuts-ui`, `session-ui` | Theme nhiều cửa sổ/khởi động lại/khung hình đầu, keyboard, font lớn, 800×650/1200×800 |
 | NFR-01–03 | Async/cancel/refcount/atomic commit | `layout`, `export`, `reconnect`, `host-key-ui`, `quick-ui` | Stress output/I/O, shutdown, quan sát responsiveness |
 | NFR-04–06 | Credential IPC/strict host check/no elevation | `sessions`, `connections`, `host-key` | Secret Service policy, quyền Serial, audit argv/env/log |
 | NFR-07–09 | UTF-8/focus/module separation | `commands`, `search`, `contents`, `draft`, `tabs` | Wayland/Orca/IME; review ownership/kiến trúc |

@@ -11,6 +11,7 @@ SRS trả lời **DevTerm phải làm gì**; SDD giải thích **source hiện t
 
 Thông tin vận hành liên quan:
 
+- [Kiểm thử lưu Light/Dark](APPEARANCE-TESTING.md): khôi phục theme từ khung hình đầu, đồng bộ nhiều cửa sổ và xử lý lỗi cấu hình.
 - [Kiểm thử UI ưu tiên cao](UI-PRIORITY-TESTING.md): Shortcuts ổn định khi mở, xác nhận đóng nhất quán và định danh pane/trạng thái.
 - [Kiểm thử dialog danh sách](DIALOGS-TESTING.md): mật độ hàng, resize/maximize, font lớn và theme.
 - [Kiểm thử Sequence](SEQUENCES-TESTING.md): các ca mới và kết quả hồi quy cho chuỗi lệnh từng hàng.

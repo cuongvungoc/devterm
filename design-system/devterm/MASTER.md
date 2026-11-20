@@ -53,7 +53,7 @@ Các cặp chữ được tính bằng công thức relative luminance sRGB: ch�
 - Cửa sổ mặc định 1200×800, tối thiểu 760×480 ở mức chữ mặc định. Cho phép resize, nhiều tab và split tùy ý; khi chia quá nhiều, người dùng cần mở rộng cửa sổ hoặc kéo divider để có vùng đọc đủ lớn.
 - Dùng GtkHeaderBar, GtkNotebook, GtkPaned, GtkFlowBox, GMenu/GAction và dialog native. Icon symbolic cùng họ, nhãn truy cập cho nút chỉ có icon, icon trang trí được ẩn khỏi accessibility tree.
 - Không dùng màu làm tín hiệu duy nhất. Giữ outline focus, tooltip và phím tắt hiện có; có mục Keyboard Shortcuts trong menu ứng dụng. Dialog phím tắt cho phép tìm theo action/nhóm, ghi nhận tổ hợp, Remove/Reset/Reassign và Apply/Cancel; dùng settings-list, màu semantic và focus outline hiện có. Tooltip toolbar/menu phản ánh phím đang cấu hình. Phím chỉnh sửa chuẩn GTK nằm ở phần tham khảo riêng.
-- Theme tối là mặc định. Menu Dark appearance đổi sáng/tối cho các cửa sổ trong tiến trình hiện tại, cửa sổ mới dùng cùng lựa chọn; chưa lưu ra đĩa. Provider thuộc GtkApplication để đóng một cửa sổ không gỡ theme khỏi cửa sổ còn lại.
+- Theme tối là mặc định. Menu Dark appearance lưu sáng/tối vào preferences.json, đồng bộ cửa sổ đang mở/cửa sổ mới và khôi phục trước lần hiển thị đầu ở lần chạy sau. Lỗi lưu báo rõ và giữ lựa chọn đang dùng. Provider thuộc GtkApplication để đóng một cửa sổ không gỡ theme khỏi cửa sổ còn lại; terminal vẫn giữ palette tối.
 - Không thêm animation; chuyển động và hành vi control theo GTK/cài đặt của phiên chạy ứng dụng.
 
 ## Cách dùng skill và đối chiếu
