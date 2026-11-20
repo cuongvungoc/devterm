@@ -17,10 +17,12 @@ struct SplitLayout {
     gpointer user_data;
 };
 
+static void pane_status(TerminalPane *pane, const char *message, gpointer data);
 static void set_active(SplitLayout *layout, TerminalPane *pane) {
     if (layout->active) pane_set_active(layout->active, FALSE);
     layout->active = pane;
     pane_set_active(pane, TRUE);
+    pane_status(pane, pane_status_message(pane), layout);
 }
 static void selected(TerminalPane *pane, const char *message, gpointer data) {
     (void)message;
@@ -28,9 +30,11 @@ static void selected(TerminalPane *pane, const char *message, gpointer data) {
     if (layout->track_focus) set_active(layout, pane);
 }
 static void pane_status(TerminalPane *pane, const char *message, gpointer data) {
-    (void)pane;
     SplitLayout *layout = data;
-    if (layout->status) layout->status(layout, message, layout->user_data);
+    if (layout->status) {
+        char *identified = g_strdup_printf("%s: %s", pane_title(pane), message);
+        layout->status(layout, identified, layout->user_data); g_free(identified);
+    }
 }
 static void request_reconnect(TerminalPane *pane, const char *message, gpointer data) {
     (void)message; SplitLayout *layout = data;
@@ -194,9 +198,12 @@ void split_layout_split(SplitLayout *layout, GtkOrientation orientation) {
     pane_focus(fresh->pane);
 }
 void split_layout_close_active(SplitLayout *layout) {
-    if (!layout || !layout->active) return;
-    LayoutNode *node = find_pane(layout->tree, layout->active);
-    if (!node || !node->parent) return;
+    if (layout) split_layout_close_pane(layout, layout->active);
+}
+gboolean split_layout_close_pane(SplitLayout *layout, TerminalPane *pane) {
+    if (!layout || !pane) return FALSE;
+    LayoutNode *node = find_pane(layout->tree, pane);
+    if (!node || !node->parent) return FALSE;
     LayoutNode *branch = node->parent;
     LayoutNode *other = branch->first == node ? branch->second : branch->first;
     LayoutNode *grand = branch->parent;
@@ -204,8 +211,8 @@ void split_layout_close_active(SplitLayout *layout) {
     gboolean start = is_start(parent, branch->widget);
     preserve_ancestors(grand);
     cancel_balance(branch);
-    pane_set_active(node->pane, FALSE);
-    layout->active = NULL;
+    gboolean was_active = layout->active == pane;
+    if (was_active) { pane_set_active(node->pane, FALSE); layout->active = NULL; }
     detach(other->widget);
     detach(node->widget);
     detach(branch->widget);
@@ -218,8 +225,9 @@ void split_layout_close_active(SplitLayout *layout) {
     pane_close(node->pane);
     g_object_unref(branch->widget);
     g_free(node); g_free(branch);
-    set_active(layout, first_leaf(other)->pane);
+    if (was_active) set_active(layout, first_leaf(other)->pane);
     split_layout_focus(layout);
+    return TRUE;
 }
 static guint count(LayoutNode *node, gboolean live_only) {
     if (!node) return 0;

@@ -22,6 +22,9 @@ void pane_reconnect_ready(TerminalPane *pane, const SessionProfile *profile, con
 void pane_finish_reconnect_request(TerminalPane *pane);
 gboolean pane_is_reconnecting(TerminalPane *pane);
 GtkWidget *pane_widget(TerminalPane *pane);
+/* Identity is stable for the pane lifetime, including reconnect and status updates. */
+const char *pane_title(TerminalPane *pane);
+const char *pane_status_message(TerminalPane *pane);
 void pane_set_active(TerminalPane *pane, gboolean active);
 void pane_focus(TerminalPane *pane);
 gboolean pane_terminal_has_focus(TerminalPane *pane);

@@ -17,6 +17,8 @@ void split_layout_suspend_focus(SplitLayout *layout);
 void split_layout_split(SplitLayout *layout, GtkOrientation orientation);
 /* The caller closes the tab instead when it contains only one pane. */
 void split_layout_close_active(SplitLayout *layout);
+/* Close the captured pane, even if selection changed while confirmation was open. */
+gboolean split_layout_close_pane(SplitLayout *layout, TerminalPane *pane);
 guint split_layout_pane_count(SplitLayout *layout);
 guint split_layout_live_sessions(SplitLayout *layout);
 

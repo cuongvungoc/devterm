@@ -100,9 +100,9 @@ static GtkWidget *row(const char *name) {
     GtkWidget *label = find(top("Manage Quick Commands"), GTK_TYPE_LABEL, name); g_assert_nonnull(label); return gtk_widget_get_parent(label);
 }
 static GtkWidget *row_action(GtkWidget *r, guint index) {
-    GtkWidget *w = gtk_widget_get_next_sibling(gtk_widget_get_first_child(r));
-    for (guint i = 0; i < index; i++) w = gtk_widget_get_next_sibling(w);
-    return w;
+    for (GtkWidget *w = gtk_widget_get_first_child(r); w; w = gtk_widget_get_next_sibling(w))
+        if (GTK_IS_BUTTON(w) && index-- == 0) return w;
+    return NULL;
 }
 static void test_manage_position(void) {
     fixture(80); open_ui(); click(manage); settle();
@@ -196,6 +196,7 @@ static GtkWidget *step_at(GtkWidget *dialog, guint index) {
 static GtkWidget *step_button_named(GtkWidget *row, const char *tooltip) {
     for (GtkWidget *c = gtk_widget_get_first_child(row); c; c = gtk_widget_get_next_sibling(c))
         if (GTK_IS_BUTTON(c) && g_strcmp0(gtk_widget_get_tooltip_text(c), tooltip) == 0) return c;
+        else { GtkWidget *found = step_button_named(c, tooltip); if (found) return found; }
     return NULL;
 }
 static void set_step(GtkWidget *row, const char *text, guint delay) {

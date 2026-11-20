@@ -1,5 +1,6 @@
 #include "sessions-ui.h"
 #include "credentials.h"
+#include "dialog-layout.h"
 #include <string.h>
 
 struct SessionManager {
@@ -17,7 +18,7 @@ static void manager_unref(gpointer data) {
     g_free(m->path); g_free(m->load_error); g_free(m);
 }
 static void notify(SessionManager *m, const char *message) {
-    if (!m->closing && m->message) gtk_label_set_text(GTK_LABEL(m->message), message);
+    if (!m->closing && m->message) { gtk_label_set_text(GTK_LABEL(m->message), message); gtk_widget_set_visible(m->message, message && *message); }
 }
 static void report_error(SessionManager *m, const char *message) {
     if (m->closing) return;
@@ -54,15 +55,15 @@ static void refresh(SessionManager *m) {
             g_strdup_printf("%s@%s:%d", p->username, p->host, p->port);
         GtkWidget *row = gtk_list_box_row_new(), *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
         gtk_widget_set_margin_start(content, 12); gtk_widget_set_margin_end(content, 12);
-        gtk_widget_set_margin_top(content, 10); gtk_widget_set_margin_bottom(content, 10);
+        gtk_widget_set_margin_top(content, 3); gtk_widget_set_margin_bottom(content, 3);
         GtkWidget *badge = gtk_label_new(type); gtk_widget_add_css_class(badge, "protocol-badge");
         gtk_label_set_width_chars(GTK_LABEL(badge), 6); gtk_widget_set_valign(badge, GTK_ALIGN_CENTER); gtk_box_append(GTK_BOX(content), badge);
-        GtkWidget *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4); gtk_widget_set_hexpand(labels, TRUE);
+        GtkWidget *labels;
         GtkWidget *name = gtk_label_new(p->name); gtk_label_set_xalign(GTK_LABEL(name), 0);
         gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END); gtk_widget_set_tooltip_text(name, p->name); gtk_widget_add_css_class(name, "section-title");
         GtkWidget *endpoint = gtk_label_new(text); gtk_label_set_xalign(GTK_LABEL(endpoint), 0); gtk_widget_add_css_class(endpoint, "muted");
         gtk_label_set_ellipsize(GTK_LABEL(endpoint), PANGO_ELLIPSIZE_END); gtk_widget_set_tooltip_text(endpoint, text); g_free(text);
-        gtk_box_append(GTK_BOX(labels), name); gtk_box_append(GTK_BOX(labels), endpoint); gtk_box_append(GTK_BOX(content), labels);
+        labels = dialog_layout_pair(name, endpoint, 660, 700, 40); gtk_widget_set_hexpand(labels, TRUE); gtk_box_append(GTK_BOX(content), labels);
         gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), content);
         g_object_set_data_full(G_OBJECT(row), "profile-id", g_strdup(p->id), g_free);
         gtk_list_box_append(GTK_LIST_BOX(m->list), row);
@@ -361,19 +362,22 @@ void session_manager_show(SessionManager *m) {
     GtkWindow *parent = g_weak_ref_get(&m->parent); if (!parent) return;
     m->window = gtk_dialog_new_with_buttons("Sessions", parent, 0, "Close", GTK_RESPONSE_CLOSE, NULL); g_object_unref(parent);
     gtk_widget_add_css_class(m->window, "devterm-dialog");
-    gtk_window_set_destroy_with_parent(GTK_WINDOW(m->window), TRUE); gtk_window_set_default_size(GTK_WINDOW(m->window), 800, 440);
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(m->window), TRUE); dialog_layout_apply(GTK_WINDOW(m->window), "sessions", 920, 760);
     g_object_set_data_full(G_OBJECT(m->window), "manager", manager_ref(m), manager_unref);
     g_signal_connect(m->window, "destroy", G_CALLBACK(manager_destroyed), m); g_signal_connect(m->window, "response", G_CALLBACK(manager_response), m);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(m->window)); gtk_box_set_spacing(GTK_BOX(box), 8);
     gtk_widget_set_margin_start(box, 12); gtk_widget_set_margin_end(box, 12); gtk_widget_set_margin_top(box, 12); gtk_widget_set_margin_bottom(box, 12);
-    GtkWidget *title = gtk_label_new("Saved connections"); gtk_label_set_xalign(GTK_LABEL(title), 0); gtk_widget_add_css_class(title, "dialog-title"); gtk_box_append(GTK_BOX(box), title);
-    GtkWidget *intro = gtk_label_new("SSH, Telnet and Serial profiles. Connect opens a new terminal tab."); gtk_label_set_xalign(GTK_LABEL(intro), 0);
-    gtk_label_set_wrap(GTK_LABEL(intro), TRUE); gtk_widget_add_css_class(intro, "muted"); gtk_widget_add_css_class(intro, "dialog-intro"); gtk_box_append(GTK_BOX(box), intro);
+    gtk_widget_set_vexpand(box, TRUE);
+    GtkWidget *intro = dialog_layout_help("Saved SSH, Telnet and Serial connections.",
+        "Select a profile and choose Connect, or double-click it, to open a new terminal tab. "
+        "Disconnect and Reconnect apply to the currently selected terminal pane, not the selected saved profile.");
+    gtk_box_append(GTK_BOX(box), intro);
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_append(GTK_BOX(box), row);
     button(GTK_BOX(row), "Add", G_CALLBACK(add_clicked), m, m->valid); button(GTK_BOX(row), "Edit", G_CALLBACK(edit_clicked), m, m->valid);
     button(GTK_BOX(row), "Duplicate", G_CALLBACK(duplicate_clicked), m, m->valid); button(GTK_BOX(row), "Delete", G_CALLBACK(delete_clicked), m, m->valid);
     button(GTK_BOX(row), "Connect", G_CALLBACK(connect_clicked), m, TRUE);
-    GtkWidget *scroll = gtk_scrolled_window_new(); gtk_widget_set_vexpand(scroll, TRUE); m->list = gtk_list_box_new();
+    GtkWidget *scroll = gtk_scrolled_window_new(); gtk_widget_set_vexpand(scroll, TRUE);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC); m->list = gtk_list_box_new();
     gtk_widget_add_css_class(m->list, "settings-list");
     GtkWidget *empty = gtk_label_new("No saved connections yet. Use Add to create an SSH, Telnet or Serial profile.");
     gtk_label_set_wrap(GTK_LABEL(empty), TRUE); gtk_widget_add_css_class(empty, "muted");
@@ -388,8 +392,8 @@ void session_manager_show(SessionManager *m) {
     GtkWidget *reconnect = gtk_button_new_with_label("Reconnect current pane"); g_object_set_data(G_OBJECT(reconnect), "reconnect", GINT_TO_POINTER(TRUE));
     gtk_widget_set_tooltip_text(reconnect, "Reconnect in the selected pane, keeping its output and split layout. Cancelling password entry keeps the existing connection.");
     g_signal_connect(reconnect, "clicked", G_CALLBACK(current_clicked), m); gtk_box_append(GTK_BOX(row), reconnect);
-    m->message = gtk_label_new(m->load_error ? m->load_error : "Select a profile, then Connect. Each connection opens a new tab.");
-    gtk_label_set_wrap(GTK_LABEL(m->message), TRUE); gtk_box_append(GTK_BOX(box), m->message); refresh(m);
+    m->message = gtk_label_new(m->load_error ? m->load_error : "");
+    gtk_label_set_wrap(GTK_LABEL(m->message), TRUE); gtk_box_append(GTK_BOX(box), m->message); gtk_widget_set_visible(m->message, m->load_error != NULL); refresh(m);
     gtk_window_present(GTK_WINDOW(m->window));
 }
 void session_manager_free(SessionManager *m) {

@@ -108,6 +108,7 @@ Các cặp `.c/.h` dùng header công khai cho phần giao tiếp; state nội b
 | [command-sequence.c](../src/command-sequence.c) | Snapshot định nghĩa, timer gửi và khóa một lượt/pane | Giữ pane/session đích; hủy timer và references khi session đổi hoặc shutdown |
 | [draft.c](../src/draft.c) | Editor theo tab, chia chiều cao, Copy/Clear/Undo và focus | Bao terminal layout trong GtkPaned; không giao tiếp child |
 | [confirm-dialog.c](../src/confirm-dialog.c) | Hộp thoại xác nhận dùng chung, mặc định Cancel | Callback kết quả và destroy notifier cho context |
+| [dialog-layout.c](../src/dialog-layout.c) | Kích thước dialog theo màn hình, cache trong RAM, maximize/restore và trợ giúp | Native bounds tránh hụt CSD khi mở lại; callback resize sau layout; hủy idle khi destroy |
 | [text-export.c](../src/text-export.c) | Ghi snapshot bất đồng bộ ra file local | `text_export_async/finish`; giữ `GBytes` đến khi hoàn tất |
 | [sessions.c](../src/sessions.c) | Model/validation/schema profile, endpoint binding, launch descriptor | Dùng chung frontend và helper; không chứa UI keyring |
 | [sessions-ui.c](../src/sessions-ui.c) | Profile editor/manager, chuẩn bị credential, Connect/Current Pane | Callback Connect tạo tab; `session_manager_connect_to` phục vụ đúng pane chờ reconnect |
@@ -189,7 +190,19 @@ Khi đóng pane: đánh dấu closed, hủy tác vụ/cancellable và timer/sear
 
 `App.shutting_down` ngăn callback phát sinh công việc mới. Quá trình destroy giải phóng TabStrip/QuickCommandsUI, đóng dialog, hủy SessionManager và export, xóa focus idle, disconnect notebook callbacks rồi dispose các tab. Provider style thuộc vòng đời ứng dụng, không bị giải phóng chỉ vì một cửa sổ đóng.
 
-Đóng tab có dialog riêng nếu còn live/starting child hoặc Draft. Đóng cửa sổ chỉ bật xác nhận mất Draft khi có nháp; nếu không có nháp thì hiện không có xác nhận bổ sung chỉ cho live child. Một dialog đóng tab đang mở được ưu tiên để tránh hai quyết định đóng cạnh tranh.
+Đóng pane/tab/cửa sổ dùng cùng preference `confirm_close_sessions` (mặc định true), tính live/starting/reconnect. Pane đã kết thúc không hỏi; Draft thuộc tab luôn cần xác nhận khi tab/cửa sổ bị đóng, dù preference false. Mỗi tab giữ dialog đóng pane hoặc đóng tab; cửa sổ ưu tiên dialog đang chờ trước khi tạo xác nhận khác. CloseRequest giữ weak window, tab ID và reference pane đích, không tra lại active pane khi chấp nhận; `split_layout_close_pane()` đóng đúng leaf và giữ active pane khác nếu còn sống. Nếu sibling biến mất khiến thao tác thành đóng tab cuối, Draft vẫn được xét lại. Destroy giải phóng dialog và request trước layout.
+
+### 4.5. Dialog có danh sách
+
+`dialog-layout.c` chia sẻ cache theo loại dialog trên GdkDisplay trong tiến trình, không ghi cấu hình. Khi mở, lấy màn hình của cửa sổ cha, giới hạn kích thước logic và dùng kích thước đã nhớ nếu có. Header có nút maximize/restore; không ghi kích thước maximized vào cache. GdkSurface::layout lên lịch timer 150 ms khi kích thước thay đổi, khởi động lại timer khi còn configure event để chỉ nhớ kích thước đã ổn định. Cache lưu native bounds gồm viền CSD. Timer không giữ strong reference tới cửa sổ; destroy hủy timer ngay để controller không trỏ tới cửa sổ đã đóng.
+
+Sessions dùng container height-for-width cho hai nhãn: chọn bố cục trong measure/allocation trước snapshot đầu, chuyển dọc dưới 660px và ngang từ 700px của vùng nhãn, giữ bố cục trong khoảng giữa. Không còn callback idle đổi orientation sau hiển thị. Shortcuts dùng cùng `DialogPair` height-for-width, ngưỡng vùng nhãn 400/440px, GtkSizeGroup cho cột phím. Cả hai lấy allocation nội dung thực thay vì so sánh native default với widget width sau 150 ms; row và ID giữ nguyên. Editor Command/Sequence dùng cùng key `quick-editor`, mặc định 1040×760, GtkStack homogeneous cả hai chiều không animation; cả hai trang đóng góp minimum size kể cả khi ẩn nên chuyển Type không ép cửa sổ lớn lên. Type/Name, hướng dẫn và footer nằm ngoài Stack; dữ liệu ở hai trang giữ nguyên cho tới Save/Cancel. Sequence dùng GtkSizeGroup cho cột delay/actions, Type/Name cùng hàng và thông tin dài trong popover. Tick ngắn sau thao tác thêm/di chuyển bước đợi allocation rồi reveal đúng hàng, được hủy khi đóng editor. Font/control giữ theo GTK, error label vẫn hiện ngoài danh sách.
+
+### 4.6. Nhận diện pane và preference đóng session
+
+`TerminalPane` giữ title bất biến `Pane N · profile/Terminal`, message riêng và label trạng thái ellipsize có tooltip. Title tooltip chứa endpoint/thư mục ban đầu; ID tăng trong tiến trình, không phải layout persistence. Sequence/error/exit/reconnect chỉ đổi message; trạng thái spawn của client là `Session running`, không khẳng định remote đã xác thực. `SplitLayout` thêm title vào thông báo trước khi chuyển cho App; khi chọn pane, phát lại message đang giữ của pane đó.
+
+`preferences.c` đọc/ghi `preferences.json` version 1 với boolean `confirm_close_sessions`; default true khi thiếu file. JSON lỗi/schema/version sai được giữ nguyên, App dùng true và báo lỗi. Save đọc lại file trước khi ghi, tạo thư mục 0700 và ghi atomic/durable file mới 0600; chỉ cập nhật model/GAction sau lưu thành công. Model thuộc GtkApplication, mọi cửa sổ dùng cùng instance và đồng bộ GAction check state. Draft không phụ thuộc preference này.
 
 ## 5. Thiết kế terminal, tab và split
 
@@ -637,7 +650,7 @@ Một nhóm test có thể chỉ kiểm một phần yêu cầu; cột thủ cô
 | FR-SESSION-06–07 | Pane reconnect state/captured profile | `reconnect`, `host-key-ui` | Remote session mới, stop chậm, đổi tab khi chờ password |
 | FR-SESSION-08 | Credentials/schema/endpoint/sealed launch fd | `sessions`, `session-ui`, `connections` | Keyring desktop locked/unavailable, vòng đời upgrade |
 | FR-HOST-01–05 | Private notice/SSH diagnostics/review/backup/etag | `connections`, `host-key`, `host-key-ui` | Xác minh fingerprint độc lập và cấu hình OpenSSH máy thật |
-| FR-UI-01–02 | Main actions/style/resources | Một phần `tabs`, `quick-ui`, `draft` | Theme nhiều cửa sổ, keyboard, font lớn, 800×650/1200×800 |
+| FR-UI-01–04 | Main actions/style/resources/DialogLayout/Preferences | `dialog-layout`, `preferences`, `tabs`, `quick-ui`, `draft`, `shortcuts-ui`, `session-ui` | Theme nhiều cửa sổ, keyboard, font lớn, 800×650/1200×800 |
 | NFR-01–03 | Async/cancel/refcount/atomic commit | `layout`, `export`, `reconnect`, `host-key-ui`, `quick-ui` | Stress output/I/O, shutdown, quan sát responsiveness |
 | NFR-04–06 | Credential IPC/strict host check/no elevation | `sessions`, `connections`, `host-key` | Secret Service policy, quyền Serial, audit argv/env/log |
 | NFR-07–09 | UTF-8/focus/module separation | `commands`, `search`, `contents`, `draft`, `tabs` | Wayland/Orca/IME; review ownership/kiến trúc |

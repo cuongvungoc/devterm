@@ -181,7 +181,7 @@ Chỉ lấy buffer còn tồn tại, không khôi phục output đã bị loại
 | FR-DRAFT-03 | Copy phải lấy selection nếu có, ngược lại toàn bộ; Clear phải xác nhận và Undo được. | Giữ whitespace/xuống dòng; Copy không xóa hoặc đánh dấu đã lưu; Clear là một thao tác Undo; rỗng khóa Copy/Clear. |
 | FR-DRAFT-04 | Nội dung phải chỉ nằm trong RAM; ẩn/đổi tab giữ trạng thái; đóng có nháp phải xác nhận. | Giữ caret, selection, scroll, undo và divider; whitespace cũng tính là nháp; nháp ẩn/đã Copy/child exit vẫn được cảnh báo. Đóng cửa sổ liệt kê các tab còn nháp. |
 
-Xác nhận đóng chỉ áp dụng cho thao tác đóng bình thường. Crash, kill cưỡng bức hoặc mất điện không thể bảo toàn Draft. Khi không có Draft, đóng cả cửa sổ hiện không thêm hộp thoại chỉ vì còn child sống; không đồng nhất với quy tắc đóng từng tab.
+Xác nhận đóng chỉ áp dụng cho thao tác đóng bình thường. Crash, kill cưỡng bức hoặc mất điện không thể bảo toàn Draft. Mặc định đóng pane, tab và cửa sổ còn session sống/đang khởi động/reconnect đều hỏi xác nhận; pane đã kết thúc đóng ngay. Tắt Confirm Before Closing Sessions chỉ bỏ xác nhận session, không bỏ xác nhận mất Draft.
 
 ### 4.7. Session profiles và kết nối
 
@@ -216,6 +216,8 @@ Serial cho phép cấu hình baud 50–4.000.000, data bits 5–8, stop bits 1�
 | --- | --- | --- |
 | FR-UI-01 | Giao diện phải có header New Terminal/Sessions, toolbar workspace, thanh tab, Quick Commands và trạng thái. | Pane actions khóa khi workspace rỗng; số tab/pane phản ánh tab hiện tại; command tự xuống hàng/cuộn khi không đủ chỗ. |
 | FR-UI-02 | Phải có sáng/tối và danh sách phím tắt; theme đồng bộ trong cùng tiến trình. | Menu ứng dụng chuyển Dark appearance; terminal vẫn tối; lựa chọn theme hiện chỉ giữ trong phiên, không lưu xuống đĩa. |
+| FR-UI-03 | Các dialog Sessions/Manage/Sequence/Shortcuts phải ưu tiên diện tích danh sách, cho resize/maximize và nhớ kích thước trong RAM. | Giới hạn khi mở trên màn hình nhỏ; nút cuối ngoài vùng cuộn; hàng đọc được với font hệ thống; Sessions bố trí ổn định ngay từ khung hình đầu, reflow giữ lựa chọn/focus; Add/Edit Command và Sequence dùng chung khung và bộ nhớ kích thước, đổi Type giữ vị trí Type/Name/Save/Cancel và nội dung đang nhập; thêm/di chuyển bước được cuộn vào vùng nhìn thấy. Trợ giúp mở được bằng bàn phím, lỗi/xung đột hiển thị trực tiếp. |
+| FR-UI-04 | Định danh pane phải ổn định và quy tắc đóng session nhất quán ở pane/tab/cửa sổ. | Title không bị tiến độ/lỗi thay thế; footer ghi nguồn pane; Cancel mặc định, đóng đúng pane đã xác nhận; preference mặc định bật được lưu và đồng bộ các cửa sổ, lỗi JSON không bị ghi đè; Draft luôn được bảo vệ. |
 
 ## 5. Các luồng sử dụng chính
 
@@ -284,6 +286,7 @@ Output mới không được thêm vào snapshot đang chờ. Hủy hoặc lỗi
 | Draft, search, scrollback | RAM/VTE của tab hoặc pane | Đến khi giải phóng; scrollback có giới hạn | Không tự lưu ra file |
 | Export | File local người dùng chọn | Đến khi người dùng xóa | Snapshot UTF-8, không màu |
 | SSH host keys | File hiệu lực do OpenSSH xác định | Theo cấu hình SSH | Chỉ sửa trong luồng xác nhận; backup cạnh file |
+| Xác nhận đóng session | `$XDG_CONFIG_HOME/devterm/preferences.json` | Qua các lần chạy | Version 1, boolean; mặc định true, Draft không phụ thuộc tùy chọn |
 | Theme | Trạng thái UI trong tiến trình | Phiên chạy | Không có setting persistence |
 
 Nếu `XDG_CONFIG_HOME` không thiết lập hoặc rỗng, hai JSON fallback về `~/.config/devterm/`. File chưa tồn tại tương ứng danh sách rỗng. JSON sai cú pháp/schema/version/ID phải được giữ nguyên và báo lỗi; lỗi Quick Commands không được ngăn terminal local hoạt động, lỗi Sessions không được ngăn Quick Commands hoặc terminal.

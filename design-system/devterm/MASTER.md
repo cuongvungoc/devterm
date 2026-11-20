@@ -7,13 +7,25 @@
 - Workspace tập trung vào terminal; phong cách tối giản, nền slate, điểm nhấn teal. Nút New Terminal là hành động chính.
 - Header chứa New Terminal, Sessions, tên ứng dụng và menu ứng dụng. Toolbar bên dưới nhóm Split Right/Down và Search/Draft/menu pane.
 - Tab có icon, tên, trạng thái chọn và nút đóng. Tên dài được rút gọn, có tooltip đầy đủ; thanh tab cuộn được.
-- Pane được chọn có cả viền teal và nhãn Selected. Output vẫn là VTE/PTY thực sự. Terminal dùng nền tối ở cả hai chế độ giao diện.
+- Pane có title cố định `Pane N · profile/Terminal`, endpoint trong tooltip, trạng thái riêng và thông báo footer ghi nguồn pane. Pane được chọn có cả viền teal và nhãn Selected. Output vẫn là VTE/PTY thực sự. Terminal dùng nền tối ở cả hai chế độ giao diện.
 - Draft nằm dưới các terminal trong tab, không chứa action gửi lệnh. Giữ nguyên cơ chế RAM, focus và xác nhận mất nháp.
 - Menu pane chứa Copy All Text, Export Text, Close Pane và Close Tab. Action không phù hợp bị vô hiệu hóa khi workspace trống; Export bị khóa trong lúc có thao tác export đang chờ.
 - Quick Commands có Add Command/Manage cố định phía trên, các nút bên dưới xuống hàng trước khi rút gọn tên dài. Vùng nút có chiều cao giới hạn và cuộn dọc khi cần; thứ tự vẫn theo cấu hình.
 - Editor Quick Commands có Type Command/Sequence. Sequence dùng hàng lệnh riêng: số thứ tự, ô command co giãn, delay sau lệnh có đơn vị ms, nút lên/xuống/xóa có tooltip và accessible label; hàng cuối hiển thị —. Danh sách cuộn dọc, Add Command Step ở ngoài vùng cuộn. Chỉ một nút Save, không thêm Continue/Stop.
 - Footer ghi trạng thái hiện tại và tổng tab/số terminal pane của tab đang xem. Thông báo dài có tooltip.
 - Sessions hiển thị loại giao thức, tên và endpoint thành các cấp riêng; trạng thái trống hướng dẫn tạo profile.
+
+## Dialog có danh sách
+
+- Kích thước tham khảo: Sessions 920×760, Manage Quick Commands 900×720, Add/Edit Quick Command 1040×760 (chung cho Command/Sequence), Shortcuts 960×800. Giới hạn theo kích thước logic màn hình cửa sổ cha, chừa không gian cho thanh desktop/viền. Dùng `dialog-layout.c` chung, không đặt lại kích thước cố định ở mỗi lần mở.
+- Sessions/Shortcuts dùng chung container height-for-width, quyết định layout trước frame đầu theo vùng nội dung thực; có khoảng ngưỡng khi resize. Cột phím Shortcuts căn qua GtkSizeGroup.
+- Header native có nút phóng lớn/khôi phục và đóng; ghi nhớ kích thước bình thường trong RAM theo loại dialog. Không nhớ trạng thái maximized hoặc vị trí màn hình vào cấu hình.
+- Vùng danh sách giãn theo cửa sổ; toolbar, cột, hướng dẫn ngắn và nút cuối cố định. Padding hàng 2px theo chiều dọc, giữ kích thước control/font GTK. Nội dung dài có ellipsis và tooltip.
+- Sessions chọn bố cục trong GTK measure/allocation trước khi vẽ; hai ngưỡng 660/700px của vùng tên/endpoint tránh đổi qua lại khi kéo gần ranh giới. Sessions chuyển tên/endpoint từ cùng hàng sang hai dòng khi cửa sổ hẹp; Shortcuts chuyển tên và metadata tương tự. Không tái tạo row khi resize để giữ lựa chọn/focus.
+- Editor dùng GtkStack đồng kích thước, không animation đổi Type và không áp lại kích thước cửa sổ; Type/Name, trợ giúp và Save/Cancel giữ vị trí. Hai loại dùng chung bộ nhớ kích thước. Sequence đặt Type và Name cạnh nhau; cột delay/actions thẳng hàng qua GtkSizeGroup, command nhận phần chiều rộng còn lại. Thêm/di chuyển bước chỉ cuộn vừa đủ sau khi GTK đã bố trí hàng.
+- Hướng dẫn chi tiết dùng popover từ nút thông tin có accessible label; Esc đóng popover. Lỗi và xung đột không bị giấu trong trợ giúp.
+
+- Đóng pane/tab/cửa sổ còn session sống dùng cùng preference xác nhận mặc định bật, lưu trong preferences.json; Cancel mặc định. Draft luôn cần xác nhận khi bị mất, kể cả khi bỏ xác nhận session. Một dialog đóng đang chờ được ưu tiên, không tạo chồng nhiều quyết định.
 
 ## Màu
 

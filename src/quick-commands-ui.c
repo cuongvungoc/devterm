@@ -1,5 +1,6 @@
 #include "quick-commands-ui.h"
 #include "confirm-dialog.h"
+#include "dialog-layout.h"
 #include <string.h>
 
 enum { EDIT, DELETE, MOVE_UP, MOVE_DOWN };
@@ -126,7 +127,10 @@ static gboolean restore_manage(GtkWidget *widget, GdkFrameClock *clock, gpointer
     GtkWidget *row = ui->focus_id ? g_hash_table_lookup(ui->rows, ui->focus_id) : NULL;
     if (row) {
         GtkWidget *buttons[4]; GtkWidget *child = gtk_widget_get_next_sibling(gtk_widget_get_first_child(row));
-        for (guint i = 0; i < 4; i++) { buttons[i] = child; child = gtk_widget_get_next_sibling(child); }
+        for (guint i = 0; i < 4; i++) {
+            while (child && !GTK_IS_BUTTON(child)) child = gtk_widget_get_next_sibling(child);
+            buttons[i] = child; child = gtk_widget_get_next_sibling(child);
+        }
         /* Row order is Up, Down, Edit, Delete. */
         guint target = ui->focus_action == MOVE_UP ? 0 : ui->focus_action == MOVE_DOWN ? 1 : 2;
         if (!gtk_widget_get_sensitive(buttons[target])) target = 2;
@@ -162,13 +166,17 @@ static gboolean move_command(QuickCommandsUI *ui, const char *id, gint target, i
 typedef struct Editor Editor;
 typedef struct {
     Editor *editor;
-    GtkWidget *row, *number, *command, *delay, *delay_stack, *up, *down;
+    GtkWidget *row, *number, *command, *delay, *delay_stack, *actions, *up, *down;
 } StepEditor;
 struct Editor {
     QuickCommandsUI *ui;
     char *id;
-    GtkWidget *dialog, *name, *command, *enter, *error, *kind, *single_box, *sequence_box, *step_rows, *add_step;
+    GtkWidget *dialog, *name, *command, *enter, *error, *kind, *single_box, *sequence_box, *step_rows, *add_step, *pages;
     GPtrArray *steps;
+    GtkSizeGroup *delay_width, *actions_width;
+    GtkWidget *step_scroll, *help, *help_note, *tools;
+    StepEditor *scroll_target;
+    guint step_tick, scroll_frames;
 };
 static void step_editor_free(gpointer data) {
     StepEditor *step = data;
@@ -177,7 +185,9 @@ static void step_editor_free(gpointer data) {
     g_object_unref(step->row); g_free(step);
 }
 static void editor_free(gpointer data) {
-    Editor *e = data; g_ptr_array_unref(e->steps); g_free(e->id); g_free(e);
+    Editor *e = data;
+    if (e->step_tick) gtk_widget_remove_tick_callback(e->step_rows, e->step_tick);
+    g_ptr_array_unref(e->steps); g_object_unref(e->step_rows); g_object_unref(e->help); g_object_unref(e->delay_width); g_object_unref(e->actions_width); g_free(e->id); g_free(e);
 }
 static void editor_destroyed(GtkWidget *dialog, gpointer data) {
     QuickCommandsUI *ui = data; if (ui->editor == dialog) ui->editor = NULL;
@@ -185,6 +195,28 @@ static void editor_destroyed(GtkWidget *dialog, gpointer data) {
 static gboolean nonblank(const char *s) {
     for (; *s; s = g_utf8_next_char(s)) if (!g_unichar_isspace(g_utf8_get_char(s))) return TRUE;
     return FALSE;
+}
+/* A newly appended row has no allocation when focus first changes. Reveal it
+ * after layout, without scrolling the whole dialog or running a lasting timer. */
+static gboolean reveal_step(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+    (void)widget; (void)clock; Editor *e = data;
+    if (++e->scroll_frames < 2) return G_SOURCE_CONTINUE;
+    e->step_tick = 0;
+    if (g_ptr_array_find(e->steps, e->scroll_target, NULL)) {
+        graphene_rect_t bounds;
+        if (gtk_widget_compute_bounds(e->scroll_target->row, e->step_scroll, &bounds)) {
+            GtkAdjustment *a = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(e->step_scroll));
+            double value = gtk_adjustment_get_value(a), height = gtk_widget_get_height(e->step_scroll);
+            if (bounds.origin.y < 0) value += bounds.origin.y;
+            else if (bounds.origin.y + bounds.size.height > height) value += bounds.origin.y + bounds.size.height - height;
+            gtk_adjustment_set_value(a, value);
+        }
+    }
+    e->scroll_target = NULL; return G_SOURCE_REMOVE;
+}
+static void focus_step(Editor *e, StepEditor *step) {
+    gtk_widget_grab_focus(step->command); e->scroll_target = step; e->scroll_frames = 0;
+    if (!e->step_tick) e->step_tick = gtk_widget_add_tick_callback(e->step_rows, reveal_step, e, NULL);
 }
 static void refresh_steps(Editor *e) {
     GtkWidget *previous = NULL;
@@ -212,13 +244,17 @@ static void step_action(GtkButton *button, gpointer data) {
         g_ptr_array_steal_index(e->steps, index); g_ptr_array_insert(e->steps, target, step);
     }
     refresh_steps(e);
+    if (e->steps->len) {
+        StepEditor *target = action ? step : e->steps->pdata[MIN(index, e->steps->len - 1)];
+        focus_step(e, target);
+    }
 }
 static GtkWidget *step_button(StepEditor *step, const char *icon, const char *label, int action) {
     GtkWidget *button = gtk_button_new_from_icon_name(icon);
     gtk_widget_set_tooltip_text(button, label);
     gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
     g_object_set_data(G_OBJECT(button), "step-action", GINT_TO_POINTER(action));
-    g_signal_connect(button, "clicked", G_CALLBACK(step_action), step); gtk_box_append(GTK_BOX(step->row), button); return button;
+    g_signal_connect(button, "clicked", G_CALLBACK(step_action), step); gtk_box_append(GTK_BOX(step->actions), button); return button;
 }
 static void add_step(Editor *e, const char *command, guint delay) {
     if (e->steps->len >= QUICK_SEQUENCE_MAX_STEPS) return;
@@ -226,17 +262,20 @@ static void add_step(Editor *e, const char *command, guint delay) {
     step->row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8); g_object_ref_sink(step->row);
     gtk_widget_add_css_class(step->row, "command-row");
     step->number = gtk_label_new(""); gtk_widget_set_size_request(step->number, 24, -1); gtk_box_append(GTK_BOX(step->row), step->number);
-    step->command = gtk_entry_new(); gtk_widget_set_hexpand(step->command, TRUE); gtk_widget_set_size_request(step->command, 240, -1);
+    step->command = gtk_entry_new(); gtk_widget_set_hexpand(step->command, TRUE); gtk_widget_set_size_request(step->command, 120, -1);
     gtk_entry_set_placeholder_text(GTK_ENTRY(step->command), "One command line");
     gtk_editable_set_text(GTK_EDITABLE(step->command), command); gtk_box_append(GTK_BOX(step->row), step->command);
-    step->delay_stack = gtk_stack_new(); gtk_widget_set_size_request(step->delay_stack, 132, -1);
+    step->delay_stack = gtk_stack_new(); gtk_size_group_add_widget(e->delay_width, step->delay_stack);
     GtkWidget *delay_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
     step->delay = gtk_spin_button_new_with_range(0, QUICK_SEQUENCE_MAX_DELAY_MS, 100);
+    gtk_editable_set_width_chars(GTK_EDITABLE(step->delay), 5);
     gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(step->delay), TRUE); gtk_spin_button_set_value(GTK_SPIN_BUTTON(step->delay), delay);
     gtk_box_append(GTK_BOX(delay_box), step->delay); gtk_box_append(GTK_BOX(delay_box), gtk_label_new("ms"));
     gtk_stack_add_named(GTK_STACK(step->delay_stack), delay_box, "delay");
     GtkWidget *last = gtk_label_new("—"); gtk_widget_set_tooltip_text(last, "No delay after the last command");
     gtk_stack_add_named(GTK_STACK(step->delay_stack), last, "last"); gtk_box_append(GTK_BOX(step->row), step->delay_stack);
+    step->actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_append(GTK_BOX(step->row), step->actions);
+    gtk_size_group_add_widget(e->actions_width, step->actions);
     step->up = step_button(step, "go-up-symbolic", "Move step up", -1);
     step->down = step_button(step, "go-down-symbolic", "Move step down", 1);
     step_button(step, "edit-delete-symbolic", "Remove step", 0);
@@ -244,17 +283,22 @@ static void add_step(Editor *e, const char *command, guint delay) {
 }
 static void add_step_clicked(GtkButton *button, gpointer data) {
     (void)button; Editor *e = data; add_step(e, "", 0);
-    if (e->steps->len) gtk_widget_grab_focus(((StepEditor *)e->steps->pdata[e->steps->len - 1])->command);
+    if (e->steps->len) focus_step(e, e->steps->pdata[e->steps->len - 1]);
 }
 static void kind_changed(GObject *object, GParamSpec *pspec, gpointer data) {
     (void)object; (void)pspec; Editor *e = data;
     gboolean sequence = gtk_drop_down_get_selected(GTK_DROP_DOWN(e->kind)) == QUICK_SEQUENCE;
-    gtk_widget_set_visible(e->single_box, !sequence); gtk_widget_set_visible(e->sequence_box, sequence);
-    gtk_window_set_default_size(GTK_WINDOW(e->dialog), sequence ? 840 : 720, sequence ? 580 : 360);
+    gtk_stack_set_visible_child(GTK_STACK(e->pages), sequence ? e->sequence_box : e->single_box);
+    gtk_stack_set_visible_child_name(GTK_STACK(e->tools), sequence ? "sequence" : "command");
+    const char *summary = sequence ? "Each row sends Enter. Delay does not wait for completion." :
+        "Input goes to the terminal. Saving does not run commands.";
+    GtkWidget *note = e->help_note;
+    gtk_label_set_text(GTK_LABEL(note), summary); gtk_widget_set_tooltip_text(note, summary);
 }
 static void on_editor_response(GtkDialog *dialog, int response, gpointer data) {
     Editor *e = data; QuickCommandsUI *ui = e->ui;
     if (response != GTK_RESPONSE_ACCEPT || ui->closing) { gtk_window_destroy(GTK_WINDOW(dialog)); return; }
+    gtk_widget_set_visible(e->error, TRUE);
     const char *name = gtk_editable_get_text(GTK_EDITABLE(e->name));
     if (!nonblank(name)) { gtk_label_set_text(GTK_LABEL(e->error), "Name is required."); return; }
     gint index = e->id ? command_index(ui, e->id) : -1;
@@ -294,39 +338,68 @@ static void show_editor(QuickCommandsUI *ui, const char *id) {
     gtk_widget_add_css_class(dialog, "devterm-dialog");
     gtk_widget_add_css_class(gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT), "suggested-action");
     gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
+    dialog_layout_apply(GTK_WINDOW(dialog), "quick-editor", 1040, 760);
     Editor *e = g_new0(Editor, 1); e->ui = ui; e->id = g_strdup(id); e->dialog = dialog;
+    e->delay_width = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL); e->actions_width = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
     e->steps = g_ptr_array_new_with_free_func(step_editor_free); g_object_set_data_full(G_OBJECT(dialog), "editor", e, editor_free);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dialog)); gtk_box_set_spacing(GTK_BOX(box), 8);
     gtk_widget_set_margin_start(box, 16); gtk_widget_set_margin_end(box, 16);
     gtk_widget_set_margin_top(box, 12); gtk_widget_set_margin_bottom(box, 12);
-    GtkWidget *label = gtk_label_new("Type"); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_box_append(GTK_BOX(box), label);
+    gtk_widget_set_vexpand(box, TRUE);
+    GtkWidget *fields = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12); gtk_box_append(GTK_BOX(box), fields);
+    GtkWidget *type_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4), *name_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_size_request(type_box, 150, -1); gtk_widget_set_hexpand(name_box, TRUE);
+    gtk_box_append(GTK_BOX(fields), type_box); gtk_box_append(GTK_BOX(fields), name_box);
+    GtkWidget *label = gtk_label_new("Type"); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_box_append(GTK_BOX(type_box), label);
     e->kind = gtk_drop_down_new_from_strings((const char *[]) {"Command", "Sequence", NULL});
-    gtk_accessible_update_property(GTK_ACCESSIBLE(e->kind), GTK_ACCESSIBLE_PROPERTY_LABEL, "Quick Command type", -1); gtk_box_append(GTK_BOX(box), e->kind);
-    label = gtk_label_new("Name"); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_box_append(GTK_BOX(box), label);
-    e->name = gtk_entry_new(); gtk_box_append(GTK_BOX(box), e->name);
+    gtk_accessible_update_property(GTK_ACCESSIBLE(e->kind), GTK_ACCESSIBLE_PROPERTY_LABEL, "Quick Command type", -1); gtk_box_append(GTK_BOX(type_box), e->kind);
+    label = gtk_label_new("Name"); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_box_append(GTK_BOX(name_box), label);
+    e->name = gtk_entry_new(); gtk_box_append(GTK_BOX(name_box), e->name);
+    gtk_label_set_mnemonic_widget(GTK_LABEL(label), e->name);
     gtk_accessible_update_property(GTK_ACCESSIBLE(e->name), GTK_ACCESSIBLE_PROPERTY_LABEL, "Name", -1);
-    e->single_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8); gtk_box_append(GTK_BOX(box), e->single_box);
+    /* Both pages contribute to minimum size, even when hidden. Switching type
+     * cannot force a small Command window to grow to fit the Sequence controls. */
+    e->pages = gtk_stack_new(); gtk_stack_set_hhomogeneous(GTK_STACK(e->pages), TRUE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(e->pages), TRUE);
+    gtk_stack_set_transition_type(GTK_STACK(e->pages), GTK_STACK_TRANSITION_TYPE_NONE);
+    gtk_widget_set_vexpand(e->pages, TRUE); gtk_box_append(GTK_BOX(box), e->pages);
+    e->single_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_valign(e->single_box, GTK_ALIGN_START); gtk_stack_add_named(GTK_STACK(e->pages), e->single_box, "command");
     label = gtk_label_new("Command"); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_box_append(GTK_BOX(e->single_box), label);
     e->command = gtk_entry_new(); gtk_widget_set_size_request(e->command, 420, -1); gtk_box_append(GTK_BOX(e->single_box), e->command);
     gtk_accessible_update_property(GTK_ACCESSIBLE(e->command), GTK_ACCESSIBLE_PROPERTY_LABEL, "Command", -1);
     e->enter = gtk_check_button_new_with_label("Send Enter after command"); gtk_check_button_set_active(GTK_CHECK_BUTTON(e->enter), TRUE);
     gtk_box_append(GTK_BOX(e->single_box), e->enter);
-    e->sequence_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8); gtk_box_append(GTK_BOX(box), e->sequence_box);
-    label = gtk_label_new("Commands · delay after each command"); gtk_label_set_xalign(GTK_LABEL(label), 0);
-    gtk_widget_add_css_class(label, "section-title"); gtk_box_append(GTK_BOX(e->sequence_box), label);
-    GtkWidget *scroll = gtk_scrolled_window_new();
+    e->sequence_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8); gtk_stack_add_named(GTK_STACK(e->pages), e->sequence_box, "sequence");
+    gtk_widget_set_vexpand(e->sequence_box, TRUE);
+    GtkWidget *head = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8); gtk_widget_add_css_class(head, "list-columns");
+    gtk_box_append(GTK_BOX(e->sequence_box), head);
+    label = gtk_label_new("#"); gtk_widget_set_size_request(label, 24, -1); gtk_box_append(GTK_BOX(head), label);
+    label = gtk_label_new("Command"); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_widget_set_hexpand(label, TRUE); gtk_box_append(GTK_BOX(head), label);
+    label = gtk_label_new("Delay after (ms)"); gtk_size_group_add_widget(e->delay_width, label); gtk_box_append(GTK_BOX(head), label);
+    label = gtk_label_new("Actions"); gtk_size_group_add_widget(e->actions_width, label); gtk_box_append(GTK_BOX(head), label);
+    GtkWidget *scroll = e->step_scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scroll), 160); gtk_widget_set_vexpand(scroll, TRUE);
-    e->step_rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4); gtk_widget_add_css_class(e->step_rows, "settings-list");
+    e->step_rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); g_object_ref_sink(e->step_rows); gtk_widget_add_css_class(e->step_rows, "settings-list");
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), e->step_rows); gtk_box_append(GTK_BOX(e->sequence_box), scroll);
+    GtkWidget *viewport = gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(scroll));
+    if (GTK_IS_VIEWPORT(viewport)) gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(viewport), TRUE);
     e->add_step = gtk_button_new_with_label("Add Command Step"); g_signal_connect(e->add_step, "clicked", G_CALLBACK(add_step_clicked), e);
-    gtk_widget_set_halign(e->add_step, GTK_ALIGN_START); gtk_box_append(GTK_BOX(e->sequence_box), e->add_step);
-    label = gtk_label_new("Each row sends one command + Enter. Delay: 0–60000 ms; no delay after the last row.\nDelay spaces input; it does not wait for a command to finish.");
-    gtk_label_set_wrap(GTK_LABEL(label), TRUE); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_widget_add_css_class(label, "muted");
-    gtk_box_append(GTK_BOX(e->sequence_box), label);
-    label = gtk_label_new("Input goes to the foreground program in the selected terminal (including SSH, vim or top). Saving does not send commands.");
-    gtk_label_set_wrap(GTK_LABEL(label), TRUE); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_widget_add_css_class(label, "muted"); gtk_box_append(GTK_BOX(box), label);
-    e->error = gtk_label_new(""); gtk_widget_add_css_class(e->error, "error"); gtk_label_set_wrap(GTK_LABEL(e->error), TRUE); gtk_box_append(GTK_BOX(box), e->error);
+    GtkWidget *help = e->help = dialog_layout_help("Each row sends Enter. Delay does not wait for a command to finish.",
+        "Sequence: each row sends one command + Enter. Delay after a row: 0–60000 ms; the last row has no delay. "
+        "Delay spaces input; it does not check completion or success.\n\n"
+        "Command: Send Enter can be disabled to insert text only. Input goes to the foreground program in the selected terminal, "
+        "including SSH, vim or top. Saving never sends commands.");
+    g_object_ref_sink(help); gtk_widget_set_hexpand(help, TRUE); gtk_box_append(GTK_BOX(box), help);
+    e->help_note = gtk_widget_get_first_child(help);
+    /* Reserve the Add Step slot in both modes; helper and footer stay put. */
+    e->tools = gtk_stack_new(); gtk_stack_set_hhomogeneous(GTK_STACK(e->tools), TRUE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(e->tools), TRUE);
+    gtk_stack_set_transition_type(GTK_STACK(e->tools), GTK_STACK_TRANSITION_TYPE_NONE);
+    gtk_stack_add_named(GTK_STACK(e->tools), gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0), "command");
+    gtk_stack_add_named(GTK_STACK(e->tools), e->add_step, "sequence"); gtk_box_prepend(GTK_BOX(help), e->tools);
+    e->error = gtk_label_new(""); gtk_widget_add_css_class(e->error, "error"); gtk_label_set_wrap(GTK_LABEL(e->error), TRUE); gtk_box_append(GTK_BOX(box), e->error); gtk_widget_set_visible(e->error, FALSE);
     gint index = id ? command_index(ui, id) : -1;
     if (index >= 0) {
         QuickCommand *item = ui->commands->pdata[index]; gtk_editable_set_text(GTK_EDITABLE(e->name), item->name);
@@ -395,13 +468,17 @@ static void refresh_manage(QuickCommandsUI *ui) {
             GtkWidget *label = gtk_label_new(item->name); gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
             gtk_label_set_max_width_chars(GTK_LABEL(label), 32); gtk_widget_set_hexpand(label, TRUE); gtk_widget_set_halign(label, GTK_ALIGN_START);
             gtk_box_append(GTK_BOX(row), label);
+            GtkWidget *kind = gtk_label_new(""); gtk_widget_add_css_class(kind, "muted"); gtk_label_set_width_chars(GTK_LABEL(kind), 9);
+            gtk_box_append(GTK_BOX(row), kind);
             gtk_box_append(GTK_BOX(row), row_button(ui, item->id, MOVE_UP)); gtk_box_append(GTK_BOX(row), row_button(ui, item->id, MOVE_DOWN));
             gtk_box_append(GTK_BOX(row), row_button(ui, item->id, EDIT)); gtk_box_append(GTK_BOX(row), row_button(ui, item->id, DELETE));
             gtk_box_append(GTK_BOX(ui->manage_rows), row); g_hash_table_insert(ui->rows, g_strdup(item->id), row);
         }
         GtkWidget *label = gtk_widget_get_first_child(row); gtk_label_set_text(GTK_LABEL(label), item->name);
         char *description = quick_command_describe(item); gtk_widget_set_tooltip_text(label, description); g_free(description);
-        GtkWidget *up = gtk_widget_get_next_sibling(label), *down = gtk_widget_get_next_sibling(up);
+        GtkWidget *kind = gtk_widget_get_next_sibling(label);
+        gtk_label_set_text(GTK_LABEL(kind), item->kind == QUICK_SEQUENCE ? "Sequence" : "Command");
+        GtkWidget *up = gtk_widget_get_next_sibling(kind), *down = gtk_widget_get_next_sibling(up);
         gtk_widget_set_sensitive(up, i > 0); gtk_widget_set_sensitive(down, i + 1 < ui->commands->len);
         gtk_box_reorder_child_after(GTK_BOX(ui->manage_rows), row, previous); previous = row;
     }
@@ -424,14 +501,18 @@ static void on_manage(GtkButton *button, gpointer data) {
     if (ui->manage_dialog) { gtk_window_present(GTK_WINDOW(ui->manage_dialog)); return; }
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Manage Quick Commands", ui->window, GTK_DIALOG_MODAL, "Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_widget_add_css_class(dialog, "devterm-dialog"); gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
-    ui->manage_dialog = dialog; gtk_window_set_default_size(GTK_WINDOW(dialog), 650, 350);
+    ui->manage_dialog = dialog; dialog_layout_apply(GTK_WINDOW(dialog), "quick-manage", 900, 720);
     GtkWidget *area = gtk_dialog_get_content_area(GTK_DIALOG(dialog)); gtk_box_set_spacing(GTK_BOX(area), 8);
     gtk_widget_set_margin_start(area, 12); gtk_widget_set_margin_end(area, 12); gtk_widget_set_margin_top(area, 12); gtk_widget_set_margin_bottom(area, 12);
-    GtkWidget *add = gtk_button_new_with_label("Add Command"); g_signal_connect(add, "clicked", G_CALLBACK(on_add), ui); gtk_box_append(GTK_BOX(area), add);
+    gtk_widget_set_vexpand(area, TRUE);
+    GtkWidget *add = gtk_button_new_with_label("Add Command"); gtk_widget_set_halign(add, GTK_ALIGN_START);
+    g_signal_connect(add, "clicked", G_CALLBACK(on_add), ui); gtk_box_append(GTK_BOX(area), add);
     ui->manage_scroll = gtk_scrolled_window_new(); gtk_widget_set_vexpand(ui->manage_scroll, TRUE);
-    ui->manage_rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6); g_object_ref_sink(ui->manage_rows);
+    ui->manage_rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); g_object_ref_sink(ui->manage_rows);
     gtk_widget_add_css_class(ui->manage_rows, "settings-list");
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(ui->manage_scroll), ui->manage_rows); gtk_box_append(GTK_BOX(area), ui->manage_scroll);
+    GtkWidget *viewport = gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(ui->manage_scroll));
+    if (GTK_IS_VIEWPORT(viewport)) gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(viewport), TRUE);
     refresh_manage(ui); g_signal_connect(dialog, "response", G_CALLBACK(on_manage_response), ui);
     g_signal_connect(dialog, "destroy", G_CALLBACK(on_manage_destroy), ui); gtk_window_present(GTK_WINDOW(dialog));
 }

@@ -68,9 +68,14 @@ static void test_keys_layout(void) {
     keys(app->window, "key", "ctrl+shift+Next"); g_assert_true(split_layout_active(tab->layout) == third);
     keys(app->window, "key", "ctrl+shift+Next"); g_assert_true(split_layout_active(tab->layout) == first);
     split_layout_select_direction(tab->layout, GTK_DIR_RIGHT); g_assert_true(split_layout_active(tab->layout) != first);
-    keys(app->window, "keydown", "ctrl+shift+x"); g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 2);
-    keys(app->window, "keydown", "ctrl+shift+x"); g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 2);
+    keys(app->window, "keydown", "ctrl+shift+x"); g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 3);
+    GtkWidget *confirmation = tab->pane_close_dialog; g_assert_nonnull(confirmation);
+    keys(app->window, "keydown", "ctrl+shift+x"); g_assert_true(tab->pane_close_dialog == confirmation);
     keys(app->window, "keyup", "ctrl+shift+x");
+    keys(confirmation, "key", "Escape"); g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 3);
+    keys(app->window, "key", "ctrl+shift+x");
+    click(find_widget(tab->pane_close_dialog, GTK_TYPE_BUTTON, "Close Pane"));
+    g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 2);
     keys(app->window, "key", "ctrl+shift+t"); g_assert_cmpuint(app->tabs->len, ==, 2);
     keys(app->window, "key", "ctrl+Prior"); g_assert_true(app->active_tab == tab);
     keys(app->window, "key", "ctrl+shift+F2"); g_assert_nonnull(dialog("Rename Tab"));

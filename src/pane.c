@@ -16,7 +16,8 @@ struct TerminalPane {
     int refs;
     GtkWidget *root;
     VteTerminal *terminal;
-    GtkWidget *label;
+    GtkWidget *label, *notice;
+    char *title, *message;
     GtkWidget *state;
     GtkWidget *search_box, *search_entry, *match_case, *whole_words, *search_message;
     GtkWidget *search_previous, *search_next;
@@ -52,6 +53,7 @@ void pane_unref(TerminalPane *p) {
     if (--p->refs) return;
     g_object_unref(p->root);
     g_free(p->working_directory);
+    g_free(p->title); g_free(p->message);
     session_profile_free(p->profile);
     g_free(p->host_diagnostics);
     g_clear_pointer(&p->host_review, ssh_host_key_unref);
@@ -64,9 +66,13 @@ void pane_unref(TerminalPane *p) {
 
 static void pane_message(TerminalPane *p, const char *message) {
     if (p->closed) return;
-    gtk_label_set_text(GTK_LABEL(p->label), message);
-    if (p->status) p->status(p, message, p->user_data);
+    char *copy = g_strdup(message); g_free(p->message); p->message = copy;
+    gtk_label_set_text(GTK_LABEL(p->notice), copy);
+    gtk_widget_set_tooltip_text(p->notice, copy);
+    if (p->status) p->status(p, copy, p->user_data);
 }
+const char *pane_title(TerminalPane *p) { return p ? p->title : ""; }
+const char *pane_status_message(TerminalPane *p) { return p ? p->message : ""; }
 void pane_report_status(TerminalPane *p, const char *message) { pane_message(p, message); }
 GCancellable *pane_input_session(TerminalPane *p) { return p->input_session; }
 static void invalidate_input_session(TerminalPane *p) {
@@ -443,7 +449,7 @@ static void on_spawn(VteTerminal *terminal, GPid pid, GError *error, gpointer da
             p->child = pid;
             p->running = TRUE;
             if (p->reconnect == RECONNECT_STARTING) clear_reconnect(p);
-            pane_message(p, p->profile ? p->profile->name : "Terminal");
+            pane_message(p, p->profile ? "Session running" : "Ready");
         }
     }
     maybe_reconnect(p);
@@ -524,13 +530,31 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     gtk_widget_set_overflow(p->root, GTK_OVERFLOW_HIDDEN);
     GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_add_css_class(header, "pane-header");
-    p->label = gtk_label_new(profile ? "Starting session…" : "Starting shell…");
-    gtk_widget_set_hexpand(p->label, TRUE); gtk_label_set_xalign(GTK_LABEL(p->label), 0);
+    static guint next_id;
+    p->title = g_strdup_printf("Pane %u · %s", ++next_id, profile ? profile->name : "Terminal");
+    p->message = g_strdup(profile ? "Starting session…" : "Starting shell…");
+    p->label = gtk_label_new(p->title);
+    gtk_label_set_xalign(GTK_LABEL(p->label), 0);
+    gtk_label_set_width_chars(GTK_LABEL(p->label), 12); gtk_label_set_max_width_chars(GTK_LABEL(p->label), 24);
     gtk_label_set_ellipsize(GTK_LABEL(p->label), PANGO_ELLIPSIZE_END);
     gtk_widget_add_css_class(p->label, "pane-label");
+    char *endpoint;
+    if (!profile) endpoint = g_strdup(p->working_directory);
+    else if (profile->type == SESSION_SERIAL) endpoint = g_strdup_printf("Serial · %s · %d baud", profile->device, profile->baud);
+    else {
+        char *address = *profile->username ? g_strdup_printf("%s@%s", profile->username, profile->host) : g_strdup(profile->host);
+        endpoint = g_strdup_printf("%s · %s · port %d", profile->type == SESSION_SSH ? "SSH" : "Telnet", address, profile->port);
+        g_free(address);
+    }
+    char *identity = g_strdup_printf("%s\n%s", p->title, endpoint);
+    gtk_widget_set_tooltip_text(p->label, identity); g_free(identity); g_free(endpoint);
+    p->notice = gtk_label_new(p->message); gtk_widget_add_css_class(p->notice, "pane-notice");
+    gtk_widget_set_hexpand(p->notice, TRUE); gtk_label_set_xalign(GTK_LABEL(p->notice), 0);
+    gtk_label_set_ellipsize(GTK_LABEL(p->notice), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_tooltip_text(p->notice, p->message);
     p->state = gtk_label_new("Selected"); gtk_widget_add_css_class(p->state, "pane-state");
     gtk_widget_set_visible(p->state, FALSE);
-    gtk_box_append(GTK_BOX(header), p->label); gtk_box_append(GTK_BOX(header), p->state);
+    gtk_box_append(GTK_BOX(header), p->label); gtk_box_append(GTK_BOX(header), p->notice); gtk_box_append(GTK_BOX(header), p->state);
     p->host_review_button = gtk_button_new_with_label("Review Host Key…");
     gtk_widget_set_visible(p->host_review_button, FALSE);
     g_signal_connect(p->host_review_button, "clicked", G_CALLBACK(review_host_clicked), p);
@@ -579,7 +603,7 @@ static TerminalPane *pane_create(const char *working_directory, const SessionPro
     if (profile) {
         GError *error = NULL;
         int fd = session_launch_fd(profile, password, &error);
-        if (fd < 0) { gtk_label_set_text(GTK_LABEL(p->label), error->message); g_clear_error(&error); return p; }
+        if (fd < 0) { pane_message(p, error->message); g_clear_error(&error); return p; }
         spawn_session(p, fd); return p;
     }
     const char *shell = g_getenv("SHELL");
@@ -631,7 +655,7 @@ void pane_reconnect_ready(TerminalPane *p, const SessionProfile *profile, const 
 void pane_finish_reconnect_request(TerminalPane *p) {
     if (p->closed || p->reconnect != RECONNECT_PASSWORD) return;
     clear_reconnect(p);
-    pane_message(p, p->running && !p->disconnecting ? p->profile->name :
+    pane_message(p, p->running && !p->disconnecting ? "Session running" :
         "Reconnect cancelled; pane output is retained.");
 }
 gboolean pane_is_reconnecting(TerminalPane *p) { return p && !p->closed && p->reconnect != RECONNECT_NONE; }
@@ -694,7 +718,7 @@ gboolean pane_copy_all_text(TerminalPane *p, GError **error) {
     return TRUE;
 }
 gboolean pane_is_running(TerminalPane *p) { return p && !p->closed && !p->disconnecting && p->reconnect == RECONNECT_NONE && p->running; }
-gboolean pane_has_live_session(TerminalPane *p) { return p && !p->closed && (p->starting || p->running); }
+gboolean pane_has_live_session(TerminalPane *p) { return p && !p->closed && (p->starting || p->running || p->reconnect != RECONNECT_NONE); }
 char *pane_dup_working_directory(TerminalPane *p) {
     /* Read the local shell process, never a remote OSC 7 directory from SSH. */
     if (p && !p->closed && p->child > 0) {

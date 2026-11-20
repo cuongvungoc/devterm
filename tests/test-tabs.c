@@ -148,6 +148,146 @@ static void test_sequence_tab_target(void) {
     on_quick_command(cmd, app); g_assert_true(command_sequences_busy(app->sequences, split_layout_active(other->layout)));
     quick_command_free(cmd); destroy_app(app);
 }
+static void wait_live(TerminalPane *pane) {
+    gint64 end = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (!pane_is_running(pane) && g_get_monotonic_time() < end) settle();
+    g_assert_true(pane_is_running(pane));
+}
+static void test_pane_confirmation_target(void) {
+    App *app = present(); TerminalTab *tab = app->active_tab;
+    TerminalPane *first = split_layout_active(tab->layout); wait_live(first);
+    split_layout_split(tab->layout, GTK_ORIENTATION_HORIZONTAL); settle();
+    TerminalPane *target = pane_ref(split_layout_active(tab->layout)); wait_live(target);
+    on_close_pane(NULL, app); GtkWidget *alert = tab->pane_close_dialog; g_assert_nonnull(alert);
+    g_assert_true(gtk_window_get_default_widget(GTK_WINDOW(alert)) == find_widget(alert, GTK_TYPE_BUTTON, "Cancel"));
+    on_close_pane(NULL, app); g_assert_true(tab->pane_close_dialog == alert);
+    gtk_window_close(GTK_WINDOW(app->window)); settle(); g_assert_null(app->window_close_dialog);
+    g_assert_true(tab->pane_close_dialog == alert); g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 2);
+    g_signal_emit_by_name(find_widget(alert, GTK_TYPE_BUTTON, "Cancel"), "clicked"); settle();
+    g_assert_null(tab->pane_close_dialog); g_assert_true(pane_is_running(target));
+    on_close_pane(NULL, app); alert = tab->pane_close_dialog; g_assert_nonnull(alert);
+    /* A selection change must never redirect an already captured close request. */
+    pane_focus(first); settle(); g_assert_true(split_layout_active(tab->layout) == first);
+    g_signal_emit_by_name(find_widget(alert, GTK_TYPE_BUTTON, "Close Pane"), "clicked"); settle();
+    g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 1);
+    g_assert_true(split_layout_active(tab->layout) == first); g_assert_true(pane_is_running(first));
+    g_assert_false(pane_has_live_session(target)); pane_unref(target); destroy_app(app);
+}
+static void test_window_confirmation_and_exited(void) {
+    App *app = present(); wait_live(split_layout_active(app->active_tab->layout));
+    on_new(NULL, app); settle(); wait_live(split_layout_active(app->active_tab->layout));
+    gtk_window_close(GTK_WINDOW(app->window)); settle(); GtkWidget *alert = app->window_close_dialog;
+    g_assert_nonnull(alert); g_assert_cmpstr(gtk_window_get_title(GTK_WINDOW(alert)), ==, "Close DevTerm?");
+    g_assert_true(gtk_window_get_default_widget(GTK_WINDOW(alert)) == find_widget(alert, GTK_TYPE_BUTTON, "Cancel"));
+    g_signal_emit_by_name(find_widget(alert, GTK_TYPE_BUTTON, "Cancel"), "clicked"); settle();
+    g_assert_cmpuint(app->tabs->len, ==, 2); g_assert_null(app->window_close_dialog);
+    TerminalTab *tab = app->active_tab; TerminalPane *pane = split_layout_active(tab->layout);
+    pane_send(pane, "exit", TRUE); gint64 end = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (pane_has_live_session(pane) && g_get_monotonic_time() < end) settle();
+    g_assert_false(pane_has_live_session(pane)); guint id = tab->id;
+    request_close_pane(tab); settle(); g_assert_null(find_tab(app, id));
+    g_assert_cmpuint(app->tabs->len, ==, 1);
+    GtkWindow *window = g_object_ref(GTK_WINDOW(app->window));
+    gtk_window_close(window); settle(); alert = app->window_close_dialog; g_assert_nonnull(alert);
+    g_signal_emit_by_name(find_widget(alert, GTK_TYPE_BUTTON, "Close DevTerm"), "clicked"); settle();
+    g_assert_false(gtk_widget_get_visible(GTK_WIDGET(window))); g_object_unref(window);
+    app = present(); pane = split_layout_active(app->active_tab->layout); wait_live(pane);
+    pane_send(pane, "exit", TRUE); end = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (pane_has_live_session(pane) && g_get_monotonic_time() < end) settle();
+    g_assert_false(pane_has_live_session(pane)); window = g_object_ref(GTK_WINDOW(app->window));
+    gtk_window_close(window); settle(); g_assert_false(gtk_widget_get_visible(GTK_WIDGET(window))); g_object_unref(window);
+}
+static void test_close_preference_and_draft(void) {
+    App *app = present(); g_assert_true(app->preferences->confirm_close_sessions);
+    action_confirm_close(NULL, NULL, app); g_assert_false(app->preferences->confirm_close_sessions);
+    char *path = preferences_config_path(); Preferences *saved = preferences_load(path, NULL);
+    g_assert_nonnull(saved); g_assert_false(saved->confirm_close_sessions); g_free(saved); g_free(path);
+    activate(application, NULL); settle(); App *other = g_object_get_data(G_OBJECT(gtk_application_get_active_window(application)), "app");
+    g_assert_true(app != other); g_assert_true(app->preferences == other->preferences);
+    GVariant *state = g_action_get_state(g_action_map_lookup_action(G_ACTION_MAP(other->window), "confirm-close-sessions"));
+    g_assert_false(g_variant_get_boolean(state)); g_variant_unref(state);
+    GtkApplication *fresh = gtk_application_new("com.example.DevTerm.PreferenceReload", G_APPLICATION_NON_UNIQUE);
+    g_assert_false(application_preferences(fresh)->confirm_close_sessions); g_object_unref(fresh);
+    TerminalTab *tab = app->active_tab; wait_live(split_layout_active(tab->layout));
+    split_layout_split(tab->layout, GTK_ORIENTATION_HORIZONTAL); settle(); wait_live(split_layout_active(tab->layout));
+    on_close_pane(NULL, app); settle(); g_assert_null(tab->pane_close_dialog); g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 1);
+    GtkWidget *view = find_widget(tab->page, GTK_TYPE_TEXT_VIEW, NULL);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(view)), "hidden draft — 東京", -1);
+    draft_set_visible(tab->draft, FALSE); request_close_tab(tab); g_assert_nonnull(tab->close_dialog);
+    g_signal_emit_by_name(find_widget(tab->close_dialog, GTK_TYPE_BUTTON, "Cancel"), "clicked"); settle();
+    gtk_window_close(GTK_WINDOW(app->window)); settle(); g_assert_nonnull(app->window_close_dialog);
+    g_assert_cmpstr(gtk_window_get_title(GTK_WINDOW(app->window_close_dialog)), ==, "Close DevTerm and discard drafts?");
+    g_signal_emit_by_name(find_widget(app->window_close_dialog, GTK_TYPE_BUTTON, "Cancel"), "clicked"); settle();
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(view)), "", -1);
+    request_close_tab(tab); settle(); g_assert_cmpuint(app->tabs->len, ==, 0);
+    action_confirm_close(NULL, NULL, other); g_assert_true(other->preferences->confirm_close_sessions);
+    state = g_action_get_state(g_action_map_lookup_action(G_ACTION_MAP(app->window), "confirm-close-sessions"));
+    g_assert_true(g_variant_get_boolean(state)); g_variant_unref(state);
+    action_confirm_close(NULL, NULL, other); g_assert_false(app->preferences->confirm_close_sessions);
+    wait_live(split_layout_active(other->active_tab->layout));
+    GtkWindow *other_window = g_object_ref(GTK_WINDOW(other->window));
+    gtk_window_close(other_window); settle(); g_assert_false(gtk_widget_get_visible(GTK_WIDGET(other_window))); g_object_unref(other_window);
+    action_confirm_close(NULL, NULL, app); g_assert_true(app->preferences->confirm_close_sessions);
+    destroy_app(app);
+}
+static void test_pending_pane_close_lifetime(void) {
+    App *app = present(); TerminalTab *tab = app->active_tab;
+    split_layout_split(tab->layout, GTK_ORIENTATION_HORIZONTAL); settle();
+    TerminalPane *target = pane_ref(split_layout_active(tab->layout)); wait_live(target);
+    on_close_pane(NULL, app); GtkWidget *alert = tab->pane_close_dialog; g_assert_nonnull(alert);
+    /* The target may already have been closed by its owning layout. */
+    g_assert_true(split_layout_close_pane(tab->layout, target));
+    g_signal_emit_by_name(find_widget(alert, GTK_TYPE_BUTTON, "Close Pane"), "clicked"); settle();
+    g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 1); g_assert_null(tab->pane_close_dialog); pane_unref(target);
+    TerminalPane *sibling = split_layout_active(tab->layout);
+    split_layout_split(tab->layout, GTK_ORIENTATION_HORIZONTAL); settle(); wait_live(split_layout_active(tab->layout));
+    GtkWidget *view = find_widget(tab->page, GTK_TYPE_TEXT_VIEW, NULL);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(view)), "Draft must survive", -1);
+    on_close_pane(NULL, app); alert = tab->pane_close_dialog; g_assert_nonnull(alert);
+    g_assert_true(split_layout_close_pane(tab->layout, sibling));
+    g_signal_emit_by_name(find_widget(alert, GTK_TYPE_BUTTON, "Close Pane"), "clicked"); settle();
+    g_assert_cmpuint(split_layout_pane_count(tab->layout), ==, 1); g_assert_nonnull(tab->close_dialog);
+    g_signal_emit_by_name(find_widget(tab->close_dialog, GTK_TYPE_BUTTON, "Cancel"), "clicked"); settle();
+    g_assert_true(draft_has_text(tab->draft));
+    split_layout_split(tab->layout, GTK_ORIENTATION_HORIZONTAL); settle(); wait_live(split_layout_active(tab->layout));
+    on_close_pane(NULL, app); g_assert_nonnull(tab->pane_close_dialog);
+    destroy_app(app); /* Pending requests must release references without touching freed tabs. */
+}
+static void test_pane_identity_and_sequence_status(void) {
+    App *app = present(); TerminalTab *tab = app->active_tab;
+    TerminalPane *first = split_layout_active(tab->layout); wait_live(first);
+    char *identity = g_strdup(pane_title(first));
+    split_layout_split(tab->layout, GTK_ORIENTATION_HORIZONTAL); settle();
+    TerminalPane *other = split_layout_active(tab->layout); wait_live(other);
+    g_assert_cmpstr(pane_title(first), !=, pane_title(other));
+    QuickCommand *sequence = quick_sequence_new("identity-sequence", "Chuỗi — 東京");
+    g_ptr_array_add(sequence->steps, quick_command_step_new("printf 'IDENTITY-FIRST\\n'", 900));
+    g_ptr_array_add(sequence->steps, quick_command_step_new("printf 'IDENTITY-LAST\\n'", 0));
+    pane_focus(first); settle(); on_quick_command(sequence, app);
+    g_assert_true(command_sequences_busy(app->sequences, first));
+    g_assert_nonnull(strstr(pane_status_message(first), "1/2"));
+    pane_focus(other); settle(); GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(app->window));
+    g_assert_true(split_layout_active(tab->layout) == other);
+    gint64 end = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+    while (command_sequences_busy(app->sequences, first) && g_get_monotonic_time() < end) settle();
+    g_assert_false(command_sequences_busy(app->sequences, first));
+    g_assert_cmpstr(pane_title(first), ==, identity);
+    g_assert_true(gtk_window_get_focus(GTK_WINDOW(app->window)) == focus);
+    GtkWidget *header = gtk_widget_get_first_child(pane_widget(first)), *name = gtk_widget_get_first_child(header);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(name)), ==, identity);
+    GtkWidget *notice = gtk_widget_get_next_sibling(name);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(notice)), ==, pane_status_message(first));
+    g_assert_nonnull(strstr(gtk_widget_get_tooltip_text(notice), "all 2 commands sent"));
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(app->status)), identity));
+    char *text = pane_text(first); g_assert_nonnull(strstr(text, "IDENTITY-LAST")); g_free(text);
+    text = pane_text(other); g_assert_null(strstr(text, "IDENTITY-LAST")); g_free(text);
+    pane_report_status(first, "Connection warning — Đường 日本語");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(name)), ==, identity);
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(app->status)), identity));
+    pane_focus(first); settle(); pane_focus(other); settle();
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(app->status)), pane_title(other)));
+    quick_command_free(sequence); g_free(identity); destroy_app(app);
+}
 int main(int argc, char **argv) {
     char *config = g_dir_make_tmp("devterm-tabs-XXXXXX", NULL); g_assert_nonnull(config);
     g_setenv("XDG_CONFIG_HOME", config, TRUE);
@@ -161,5 +301,12 @@ int main(int argc, char **argv) {
     g_test_add_func("/tabs/close-confirmation", test_close_confirmation);
     g_test_add_func("/tabs/pending-rename-close", test_pending_rename);
     g_test_add_func("/tabs/sequence-tab-target", test_sequence_tab_target);
-    int result = g_test_run(); g_object_unref(application); g_rmdir(config); g_free(config); return result;
+    g_test_add_func("/tabs/pane-close-captured-target", test_pane_confirmation_target);
+    g_test_add_func("/tabs/window-close-live-and-exited", test_window_confirmation_and_exited);
+    g_test_add_func("/tabs/close-preference-draft", test_close_preference_and_draft);
+    g_test_add_func("/tabs/pending-pane-close-lifetime", test_pending_pane_close_lifetime);
+    g_test_add_func("/tabs/pane-identity-sequence-status", test_pane_identity_and_sequence_status);
+    int result = g_test_run(); g_object_unref(application);
+    char *preferences = preferences_config_path(), *directory = g_path_get_dirname(preferences);
+    g_remove(preferences); g_rmdir(directory); g_free(preferences); g_free(directory); g_rmdir(config); g_free(config); return result;
 }

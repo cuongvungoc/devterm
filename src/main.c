@@ -10,6 +10,7 @@
 #include "runtime.h"
 #include "shortcuts-ui.h"
 #include "command-sequence.h"
+#include "preferences.h"
 #include <gtk/gtk.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -23,7 +24,7 @@ struct TerminalTab {
     Draft *draft;
     GtkWidget *page;
     char *title, *message;
-    GtkWidget *close_dialog;
+    GtkWidget *close_dialog, *pane_close_dialog;
 };
 struct App {
     GtkWidget *window, *workspace, *notebook, *quick_bar, *status;
@@ -41,6 +42,7 @@ struct App {
     CommandSequences *sequences;
     SessionManager *sessions;
     ShortcutSettings *shortcuts; /* Application-owned. */
+    Preferences *preferences; /* Application-owned; shared by all windows. */
     GHashTable *pressed_shortcuts;
     GtkWidget *shortcut_widgets[SC_COUNT];
 };
@@ -103,6 +105,8 @@ static void tab_dispose(TerminalTab *tab) {
     tab_strip_remove(tab->app->tab_strip, tab->id);
     GtkWidget *dialog = g_steal_pointer(&tab->close_dialog);
     if (dialog) gtk_window_destroy(GTK_WINDOW(dialog));
+    dialog = g_steal_pointer(&tab->pane_close_dialog);
+    if (dialog) gtk_window_destroy(GTK_WINDOW(dialog));
     g_clear_pointer(&tab->draft, draft_free);
     split_layout_free(tab->layout);
     tab->layout = NULL;
@@ -161,13 +165,15 @@ static void close_tab_now(TerminalTab *tab) {
 }
 /* Resolve both window and tab at response time. A strong parent reference
  * here would keep a destroyed window alive while its modal child waits. */
-typedef struct { GWeakRef window; guint tab_id; } CloseRequest;
+typedef struct { GWeakRef window; guint tab_id; TerminalPane *pane; } CloseRequest;
 static CloseRequest *close_request_new(GtkWidget *window, guint tab_id) {
     CloseRequest *request = g_new0(CloseRequest, 1);
-    g_weak_ref_init(&request->window, window); request->tab_id = tab_id; return request;
+    g_weak_ref_init(&request->window, window); request->tab_id = tab_id; request->pane = NULL; return request;
 }
 static void close_request_free(gpointer data) {
-    CloseRequest *request = data; g_weak_ref_clear(&request->window); g_free(request);
+    CloseRequest *request = data; g_weak_ref_clear(&request->window);
+    if (request->pane) pane_unref(request->pane);
+    g_free(request);
 }
 static void on_close_response(gboolean accepted, gpointer data) {
     CloseRequest *request = data;
@@ -185,9 +191,10 @@ static void on_close_response(gboolean accepted, gpointer data) {
 }
 static void request_close_tab(TerminalTab *tab) {
     if (!tab || tab->app->shutting_down || tab->close_dialog || tab->app->window_close_dialog) return;
+    if (tab->pane_close_dialog) { gtk_window_present(GTK_WINDOW(tab->pane_close_dialog)); return; }
     guint live = split_layout_live_sessions(tab->layout);
     gboolean draft = draft_has_text(tab->draft);
-    if (live == 0 && !draft) { close_tab_now(tab); return; }
+    if ((!live || !tab->app->preferences->confirm_close_sessions) && !draft) { close_tab_now(tab); return; }
     char *title = g_strdup_printf("Close %s?", tab->title);
     GString *detail = g_string_new(NULL);
     if (live) g_string_append_printf(detail, "This will end all %u terminal session(s) in this tab, including any running programs.", live);
@@ -196,6 +203,45 @@ static void request_close_tab(TerminalTab *tab) {
     tab->close_dialog = confirm_dialog_show(GTK_WINDOW(tab->app->window), title, detail->str,
         "Close Tab", on_close_response, request, close_request_free);
     g_free(title); g_string_free(detail, TRUE);
+}
+static void on_pane_close_response(gboolean accepted, gpointer data) {
+    CloseRequest *request = data; GtkWidget *window = g_weak_ref_get(&request->window);
+    App *app = window ? g_object_get_data(G_OBJECT(window), "app") : NULL;
+    if (app && !app->shutting_down) {
+        TerminalTab *tab = find_tab(app, request->tab_id);
+        if (tab) {
+            tab->pane_close_dialog = NULL;
+            if (accepted) {
+                if (split_layout_pane_count(tab->layout) == 1 && split_layout_active(tab->layout) == request->pane) {
+                    /* A sibling may have closed while the alert was pending.
+                     * Closing the last pane now also discards the tab's Draft. */
+                    if (draft_has_text(tab->draft)) request_close_tab(tab); else close_tab_now(tab);
+                } else if (split_layout_close_pane(tab->layout, request->pane)) {
+                    char *message = g_strdup_printf("%s closed", pane_title(request->pane)); status(app, message); g_free(message);
+                }
+                sync_workspace(app);
+            } else schedule_focus(app);
+        }
+    }
+    g_clear_object(&window);
+}
+static void request_close_pane(TerminalTab *tab) {
+    App *app = tab->app;
+    if (app->shutting_down || tab->close_dialog || app->window_close_dialog) return;
+    if (tab->pane_close_dialog) { gtk_window_present(GTK_WINDOW(tab->pane_close_dialog)); return; }
+    if (split_layout_pane_count(tab->layout) == 1) { request_close_tab(tab); return; }
+    TerminalPane *pane = split_layout_active(tab->layout);
+    if (!pane) return;
+    if (!app->preferences->confirm_close_sessions || !pane_has_live_session(pane)) {
+        char *message = g_strdup_printf("%s closed", pane_title(pane));
+        split_layout_close_pane(tab->layout, pane); status(app, message); g_free(message); return;
+    }
+    CloseRequest *request = close_request_new(app->window, tab->id); request->pane = pane_ref(pane);
+    char *title = g_strdup_printf("Close %s?", pane_title(pane));
+    char *detail = g_strdup_printf("This will end the terminal session in %s, including any running programs. Other panes and this tab's Draft are kept.", pane_title(pane));
+    tab->pane_close_dialog = confirm_dialog_show(GTK_WINDOW(app->window), title, detail, "Close Pane",
+        on_pane_close_response, request, close_request_free);
+    g_free(detail); g_free(title);
 }
 static void on_tab_action(guint id, TabStripAction action, const char *title, gpointer data) {
     App *app = data;
@@ -306,11 +352,7 @@ static void on_close_pane(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
     if (!app->active_tab) { status(app, "No terminal pane to close"); return; }
-    if (split_layout_pane_count(app->active_tab->layout) == 1) request_close_tab(app->active_tab);
-    else {
-        split_layout_close_active(app->active_tab->layout);
-        status(app, "Pane closed");
-    }
+    request_close_pane(app->active_tab);
     sync_workspace(app);
 }
 static void action_new_tab(GSimpleAction *action, GVariant *parameter, gpointer data) {
@@ -533,6 +575,37 @@ static void action_appearance(GSimpleAction *action, GVariant *parameter, gpoint
     }
     ui_style_apply(app->style, dark);
 }
+static Preferences *application_preferences(GtkApplication *application) {
+    Preferences *preferences = g_object_get_data(G_OBJECT(application), "preferences");
+    if (preferences) return preferences;
+    char *path = preferences_config_path(); GError *error = NULL; preferences = preferences_load(path, &error);
+    if (!preferences) {
+        preferences = g_new0(Preferences, 1); preferences->confirm_close_sessions = TRUE;
+        char *message = g_strdup_printf("Cannot load %s: %s. Close confirmation remains enabled; the file has been preserved.", path, error->message);
+        g_object_set_data_full(G_OBJECT(application), "preferences-error", message, g_free); g_clear_error(&error);
+    }
+    g_free(path); g_object_set_data_full(G_OBJECT(application), "preferences", preferences, g_free); return preferences;
+}
+static void action_confirm_close(GSimpleAction *action, GVariant *parameter, gpointer data) {
+    (void)action; (void)parameter; App *app = data;
+    Preferences next = *app->preferences; next.confirm_close_sessions = !next.confirm_close_sessions;
+    char *path = preferences_config_path(); GError *error = NULL;
+    if (!preferences_save(path, &next, &error)) {
+        GtkAlertDialog *alert = gtk_alert_dialog_new("Cannot save close confirmation preference");
+        gtk_alert_dialog_set_detail(alert, error->message); gtk_alert_dialog_show(alert, GTK_WINDOW(app->window));
+        g_object_unref(alert); status(app, error->message); g_clear_error(&error); g_free(path); return;
+    }
+    g_free(path); *app->preferences = next;
+    GtkApplication *application = gtk_window_get_application(GTK_WINDOW(app->window));
+    g_object_set_data(G_OBJECT(application), "preferences-error", NULL);
+    for (GList *item = gtk_application_get_windows(application); item; item = item->next) {
+        if (!G_IS_ACTION_MAP(item->data)) continue;
+        GSimpleAction *toggle = G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(item->data), "confirm-close-sessions"));
+        if (toggle) g_simple_action_set_state(toggle, g_variant_new_boolean(next.confirm_close_sessions));
+    }
+    status(app, next.confirm_close_sessions ? "Live session close confirmation enabled" :
+        "Live session close confirmation disabled. Closing a tab or window with Draft text still asks for confirmation.");
+}
 
 static void on_window_destroy(GtkWidget *window, gpointer data) {
     (void)window;
@@ -572,15 +645,17 @@ static gboolean on_window_close_request(GtkWindow *window, gpointer data) {
         for (guint i = 0; i < app->tabs->len; i++) {
             TerminalTab *tab = app->tabs->pdata[i];
             /* A tab close alert already owns the modal decision. */
-            if (tab->close_dialog) { g_string_free(names, TRUE); return TRUE; }
+            GtkWidget *pending = tab->close_dialog ? tab->close_dialog : tab->pane_close_dialog;
+            if (pending) { gtk_window_present(GTK_WINDOW(pending)); g_string_free(names, TRUE); return TRUE; }
             live += split_layout_live_sessions(tab->layout);
             if (draft_has_text(tab->draft)) {
                 g_string_append_printf(names, "%s%s", drafts ? ", " : "", tab->title); drafts++;
             }
         }
-        if (drafts) {
-            char *detail = g_strdup_printf("%u tab(s) contain draft text, including hidden drafts:\n%s\n\nClosing DevTerm discards these drafts and ends %u running terminal session(s). Drafts are kept in memory only; copying text does not save them.", drafts, names->str, live);
-            app->window_close_dialog = confirm_dialog_show(window, "Close DevTerm and discard drafts?", detail,
+        if (drafts || (live && app->preferences->confirm_close_sessions)) {
+            char *detail = drafts ? g_strdup_printf("%u tab(s) contain draft text, including hidden drafts:\n%s\n\nClosing DevTerm discards these drafts and ends %u running terminal session(s). Drafts are kept in memory only; copying text does not save them.", drafts, names->str, live) :
+                g_strdup_printf("Closing this DevTerm window will end %u terminal session(s) across %u tab(s), including any running programs.", live, app->tabs->len);
+            app->window_close_dialog = confirm_dialog_show(window, drafts ? "Close DevTerm and discard drafts?" : "Close DevTerm?", detail,
                 "Close DevTerm", on_window_close_response, close_request_new(GTK_WIDGET(window), 0), close_request_free);
             g_free(detail); g_string_free(names, TRUE); return TRUE;
         }
@@ -612,6 +687,7 @@ static void activate(GtkApplication *application, gpointer data) {
     app->sequences = command_sequences_new();
     app->pressed_shortcuts = g_hash_table_new(g_direct_hash, g_direct_equal);
     app->shortcuts = shortcut_settings_get(application);
+    app->preferences = application_preferences(application);
     app->window = gtk_application_window_new(application);
     gtk_window_set_icon_name(GTK_WINDOW(app->window), "com.example.DevTerm");
     g_object_set_data_full(G_OBJECT(app->window), "app", app, app_free);
@@ -646,9 +722,12 @@ static void activate(GtkApplication *application, gpointer data) {
         {.name = "quick-add", .activate = action_workspace},
         {.name = "copy", .activate = action_workspace},
         {.name = "paste", .activate = action_workspace},
-        {.name = "dark-appearance", .activate = action_appearance, .state = "true"}
+        {.name = "dark-appearance", .activate = action_appearance, .state = "true"},
+        {.name = "confirm-close-sessions", .activate = action_confirm_close, .state = "true"}
     };
     g_action_map_add_action_entries(G_ACTION_MAP(app->window), actions, G_N_ELEMENTS(actions), app);
+    g_simple_action_set_state(G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(app->window), "confirm-close-sessions")),
+        g_variant_new_boolean(app->preferences->confirm_close_sessions));
     g_signal_connect_object(app->shortcuts, "changed", G_CALLBACK(on_shortcuts_changed), app->window, 0);
     GtkEventController *shortcut_keys = gtk_event_controller_legacy_new();
     gtk_event_controller_set_propagation_phase(shortcut_keys, GTK_PHASE_CAPTURE);
@@ -680,10 +759,11 @@ static void activate(GtkApplication *application, gpointer data) {
     GtkWidget *sessions = ui_button("network-server-symbolic", "Sessions", "Manage SSH, Telnet and Serial profiles");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(sessions), "win.sessions"); gtk_header_bar_pack_start(GTK_HEADER_BAR(header), sessions);
     GMenu *app_menu = g_menu_new(); g_menu_append(app_menu, "Dark appearance", "win.dark-appearance");
+    g_menu_append(app_menu, "Confirm Before Closing Sessions", "win.confirm-close-sessions");
     g_menu_append(app_menu, "Keyboard Shortcuts", "win.shortcuts");
     GtkWidget *main_menu = gtk_menu_button_new(); gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(main_menu), "open-menu-symbolic");
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(main_menu), G_MENU_MODEL(app_menu)); g_object_unref(app_menu);
-    gtk_widget_set_tooltip_text(main_menu, "Appearance and keyboard shortcuts");
+    gtk_widget_set_tooltip_text(main_menu, "Appearance, close confirmation and keyboard shortcuts");
     gtk_accessible_update_property(GTK_ACCESSIBLE(main_menu), GTK_ACCESSIBLE_PROPERTY_LABEL, "Application menu", -1);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), main_menu); gtk_window_set_titlebar(GTK_WINDOW(app->window), header);
     GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -783,6 +863,8 @@ static void activate(GtkApplication *application, gpointer data) {
     on_shortcuts_changed(app->shortcuts, app->window);
     on_new(NULL, app);
     if (shortcut_settings_error(app->shortcuts)) status(app, shortcut_settings_error(app->shortcuts));
+    const char *preferences_error = g_object_get_data(G_OBJECT(application), "preferences-error");
+    if (preferences_error) status(app, preferences_error);
     if (config_error) { status(app, config_error); g_free(config_error); }
     gtk_window_present(GTK_WINDOW(app->window));
     schedule_focus(app);

@@ -106,8 +106,12 @@ static void reconnect(TerminalPane *p) {
 
 static void test_layout_history(void) {
     SessionProfile *p = profile(SESSION_SSH, FALSE);
+    g_free(p->name); p->name = g_strdup("Router — Đường 日本語");
     SplitLayout *layout = split_layout_new_session(p, NULL, NULL, NULL);
     TerminalPane *original = split_layout_active(layout);
+    char *identity = g_strdup(pane_title(original)); g_assert_nonnull(strstr(identity, p->name));
+    GtkWidget *identity_label = gtk_widget_get_first_child(gtk_widget_get_first_child(pane_widget(original)));
+    g_assert_nonnull(strstr(gtk_widget_get_tooltip_text(identity_label), "snapshot.example"));
     Draft *draft = draft_new(split_layout_widget(layout), "Test", NULL, NULL);
     GtkWidget *notebook = gtk_notebook_new();
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), draft_widget(draft), gtk_label_new("Session"));
@@ -130,6 +134,9 @@ static void test_layout_history(void) {
         reconnect(original); g_assert_true(pane_is_reconnecting(original));
         g_assert_null(pane_prepare_reconnect(original));
         wait_ready(original, i);
+        g_assert_cmpstr(pane_title(original), ==, identity);
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(identity_label)), ==, identity);
+        g_assert_cmpstr(pane_status_message(original), ==, "Session running");
         g_assert_true(pane_widget(original) == pane_root); g_assert_true(find(pane_root, VTE_TYPE_TERMINAL) == vte);
         g_assert_cmpuint(split_layout_pane_count(layout), ==, 2);
         g_assert_cmpint(gtk_notebook_get_n_pages(GTK_NOTEBOOK(notebook)), ==, 2);
@@ -149,7 +156,7 @@ static void test_layout_history(void) {
     text = vte_terminal_get_text_selected(VTE_TERMINAL(vte), VTE_FORMAT_TEXT);
     g_assert_cmpstr(text, ==, "snapshot.example"); g_free(text);
     gtk_window_set_focus(window, NULL); gtk_window_set_child(window, NULL);
-    draft_free(draft); split_layout_free(layout); wait_clients_closed();
+    draft_free(draft); split_layout_free(layout); wait_clients_closed(); g_free(identity);
 }
 static void test_protocol(gconstpointer data) {
     SessionProfile *p = profile(GPOINTER_TO_INT(data), FALSE); TerminalPane *pane = new_pane(p);

@@ -1,4 +1,5 @@
 #include "shortcuts-ui.h"
+#include "dialog-layout.h"
 #include <glib/gstdio.h>
 
 struct _ShortcutSettings {
@@ -88,14 +89,15 @@ void shortcut_settings_tooltip(ShortcutSettings *s, GtkWidget *widget, ShortcutI
 typedef struct {
     ShortcutSettings *settings;
     ShortcutBindings *draft;
-    GtkWidget *dialog, *search, *message, *apply, *reassign, *reset_all;
+    GtkWidget *dialog, *search, *message, *apply, *reassign, *reset_all, *help;
     GtkWidget *rows[SC_COUNT], *keys[SC_COUNT], *states[SC_COUNT];
+    GtkSizeGroup *key_width;
     int recording, conflict, candidate_id;
     char *candidate;
     gboolean recover;
 } Editor;
 static void editor_message(Editor *e, const char *text, gboolean error) {
-    gtk_label_set_text(GTK_LABEL(e->message), text);
+    gtk_label_set_text(GTK_LABEL(e->message), text); gtk_widget_set_visible(e->message, text && *text);
     if (error) gtk_widget_add_css_class(e->message, "error"); else gtk_widget_remove_css_class(e->message, "error");
 }
 static void clear_candidate(Editor *e) {
@@ -106,7 +108,8 @@ static void refresh(Editor *e) {
     ShortcutBindings *defaults = shortcut_bindings_new();
     for (int i = 0; i < SC_COUNT; i++) {
         char *key = shortcut_label(e->draft->keys[i]);
-        gtk_button_set_label(GTK_BUTTON(e->keys[i]), i == e->recording ? "Press shortcut… (Esc cancels)" : key);
+        gtk_button_set_label(GTK_BUTTON(e->keys[i]), i == e->recording ? "Press keys…" : key);
+        gtk_widget_set_tooltip_text(e->keys[i], i == e->recording ? "Press a shortcut; Esc cancels recording." : key);
         gtk_label_set_text(GTK_LABEL(e->states[i]), g_strcmp0(e->draft->keys[i], defaults->keys[i]) ? "Customized" : "Default");
         g_free(key);
     }
@@ -162,6 +165,12 @@ static gboolean modifier_key(guint key) {
 }
 static gboolean editor_key(GtkEventControllerKey *controller, guint key, guint code, GdkModifierType state, gpointer data) {
     (void)code; (void)state; Editor *e = data;
+    GtkMenuButton *info = GTK_MENU_BUTTON(gtk_widget_get_last_child(e->help));
+    GtkPopover *help = gtk_menu_button_get_popover(info);
+    if (gtk_widget_get_visible(GTK_WIDGET(help))) {
+        if (key == GDK_KEY_Escape) { gtk_popover_popdown(help); return TRUE; }
+        return FALSE;
+    }
     if (key == GDK_KEY_Escape) {
         if (e->recording >= 0 || e->candidate) {
             e->recording = -1; clear_candidate(e); editor_message(e, "Shortcut change cancelled.", FALSE); refresh(e);
@@ -186,7 +195,7 @@ static void filter_rows(GtkEditable *editable, gpointer data) {
 }
 static void editor_destroyed(GtkWidget *dialog, gpointer data) {
     (void)dialog; Editor *e = data; e->settings->dialog = NULL;
-    shortcut_bindings_free(e->draft); g_free(e->candidate); g_object_unref(e->settings); g_free(e);
+    shortcut_bindings_free(e->draft); g_free(e->candidate); g_object_unref(e->settings); g_object_unref(e->key_width); g_free(e);
 }
 static void editor_response(GtkDialog *dialog, int response, gpointer data) {
     Editor *e = data;
@@ -212,16 +221,22 @@ static GtkWidget *editor_button(Editor *e, GtkBox *row, const char *label, int i
 void shortcut_settings_show(ShortcutSettings *settings, GtkWindow *parent) {
     if (settings->dialog) { gtk_window_present(GTK_WINDOW(settings->dialog)); return; }
     Editor *e = g_new0(Editor, 1); e->settings = g_object_ref(settings);
+    e->key_width = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
     e->draft = shortcut_bindings_copy(settings->bindings); e->recording = e->conflict = -1;
     e->dialog = settings->dialog = gtk_dialog_new_with_buttons("Keyboard Shortcuts", parent, GTK_DIALOG_MODAL,
         "Cancel", GTK_RESPONSE_CANCEL, "Apply", GTK_RESPONSE_APPLY, NULL);
     gtk_window_set_destroy_with_parent(GTK_WINDOW(e->dialog), TRUE);
-    gtk_window_set_default_size(GTK_WINDOW(e->dialog), 760, 640);
+    dialog_layout_apply(GTK_WINDOW(e->dialog), "shortcuts", 960, 800);
     gtk_widget_add_css_class(e->dialog, "devterm-dialog");
-    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(e->dialog)); gtk_box_set_spacing(GTK_BOX(box), 12);
-    gtk_widget_set_margin_start(box, 24); gtk_widget_set_margin_end(box, 24); gtk_widget_set_margin_top(box, 16); gtk_widget_set_margin_bottom(box, 16);
-    GtkWidget *intro = gtk_label_new("Customize shortcuts for this application. Copy/Paste shortcuts apply only when a terminal has focus.");
-    gtk_label_set_wrap(GTK_LABEL(intro), TRUE); gtk_label_set_xalign(GTK_LABEL(intro), 0); gtk_widget_add_css_class(intro, "muted"); gtk_box_append(GTK_BOX(box), intro);
+    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(e->dialog)); gtk_box_set_spacing(GTK_BOX(box), 8);
+    gtk_widget_set_vexpand(box, TRUE);
+    gtk_widget_set_margin_start(box, 16); gtk_widget_set_margin_end(box, 16); gtk_widget_set_margin_top(box, 16); gtk_widget_set_margin_bottom(box, 16);
+    GtkWidget *intro = e->help = dialog_layout_help("Click a shortcut to change it. Apply saves your changes.",
+        "Copy/Paste shortcuts apply only when a terminal has focus. Esc cancels recording. "
+        "Cancel discards changes since the last Apply. Desktop-reserved keys may not reach DevTerm.\n\n"
+        "Text editing uses GTK defaults: Draft Undo Ctrl+Z, Redo Ctrl+Shift+Z. "
+        "Search: Enter / Shift+Enter, Esc to close.");
+    gtk_box_append(GTK_BOX(box), intro);
     e->search = gtk_search_entry_new(); gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(e->search), "Search actions or groups…");
     gtk_box_append(GTK_BOX(box), e->search); g_signal_connect(e->search, "changed", G_CALLBACK(filter_rows), e);
     GtkWidget *scroll = gtk_scrolled_window_new(); gtk_widget_set_vexpand(scroll, TRUE);
@@ -230,21 +245,27 @@ void shortcut_settings_show(ShortcutSettings *settings, GtkWindow *parent) {
     gtk_widget_add_css_class(list, "settings-list"); gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), list); gtk_box_append(GTK_BOX(box), scroll);
     for (int i = 0; i < SC_COUNT; i++) {
         const ShortcutDefinition *d = shortcut_definition(i);
-        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8), *names = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        gtk_widget_set_hexpand(names, TRUE); gtk_widget_set_margin_start(row, 8); gtk_widget_set_margin_end(row, 8);
-        GtkWidget *name = gtk_label_new(d->label); gtk_label_set_xalign(GTK_LABEL(name), 0); gtk_box_append(GTK_BOX(names), name);
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_start(row, 8); gtk_widget_set_margin_end(row, 8);
+        GtkWidget *name = gtk_label_new(d->label); gtk_label_set_xalign(GTK_LABEL(name), 0);
+        gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END); gtk_widget_set_tooltip_text(name, d->label);
+        gtk_widget_set_hexpand(name, TRUE);
         GtkWidget *meta = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8), *group = gtk_label_new(d->group);
         gtk_widget_add_css_class(meta, "muted"); gtk_widget_add_css_class(meta, "caption"); gtk_box_append(GTK_BOX(meta), group);
-        e->states[i] = gtk_label_new(""); gtk_box_append(GTK_BOX(meta), e->states[i]); gtk_box_append(GTK_BOX(names), meta); gtk_box_append(GTK_BOX(row), names);
+        e->states[i] = gtk_label_new(""); gtk_box_append(GTK_BOX(meta), e->states[i]);
+        GtkWidget *names = dialog_layout_pair(name, meta, 400, 440, 65);
+        gtk_widget_set_hexpand(names, TRUE); gtk_box_append(GTK_BOX(row), names);
         e->keys[i] = editor_button(e, GTK_BOX(row), "Change", i, G_CALLBACK(change_clicked));
+        gtk_size_group_add_widget(e->key_width, e->keys[i]);
         editor_button(e, GTK_BOX(row), "Remove", i, G_CALLBACK(remove_clicked));
         editor_button(e, GTK_BOX(row), "Reset", i, G_CALLBACK(reset_clicked));
         gtk_list_box_append(GTK_LIST_BOX(list), row); e->rows[i] = gtk_widget_get_parent(row);
     }
-    GtkWidget *reference = gtk_label_new("Text editing — GTK defaults: Draft Undo Ctrl+Z, Redo Ctrl+Shift+Z. Search: Enter / Shift+Enter, Esc to close.");
-    gtk_label_set_wrap(GTK_LABEL(reference), TRUE); gtk_label_set_xalign(GTK_LABEL(reference), 0); gtk_widget_add_css_class(reference, "muted"); gtk_box_append(GTK_BOX(box), reference);
     e->message = gtk_label_new(""); gtk_label_set_wrap(GTK_LABEL(e->message), TRUE); gtk_label_set_xalign(GTK_LABEL(e->message), 0); gtk_box_append(GTK_BOX(box), e->message);
-    GtkWidget *tools = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8); gtk_box_append(GTK_BOX(box), tools);
+    GtkWidget *tools = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *apply_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(e->dialog), GTK_RESPONSE_APPLY);
+    GtkWidget *actions = gtk_widget_get_parent(apply_button); gtk_widget_set_hexpand(tools, TRUE);
+    gtk_widget_set_halign(actions, GTK_ALIGN_FILL); gtk_box_prepend(GTK_BOX(actions), tools);
     e->reset_all = editor_button(e, GTK_BOX(tools), settings->load_error ? "Restore Defaults & Back Up Invalid File" : "Reset All", -1, G_CALLBACK(reset_all_clicked));
     e->reassign = editor_button(e, GTK_BOX(tools), "Reassign", -1, G_CALLBACK(reassign_clicked)); gtk_widget_set_visible(e->reassign, FALSE);
     e->apply = gtk_dialog_get_widget_for_response(GTK_DIALOG(e->dialog), GTK_RESPONSE_APPLY);
@@ -252,6 +273,6 @@ void shortcut_settings_show(ShortcutSettings *settings, GtkWindow *parent) {
     GtkEventController *keys = gtk_event_controller_key_new(); gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
     g_signal_connect(keys, "key-pressed", G_CALLBACK(editor_key), e); gtk_widget_add_controller(e->dialog, keys);
     g_signal_connect(e->dialog, "response", G_CALLBACK(editor_response), e); g_signal_connect(e->dialog, "destroy", G_CALLBACK(editor_destroyed), e);
-    editor_message(e, settings->load_error ? settings->load_error : "Click a shortcut to change it. Apply saves; Cancel discards pending changes. Desktop-reserved keys may not reach DevTerm.", settings->load_error != NULL);
+    editor_message(e, settings->load_error ? settings->load_error : "", settings->load_error != NULL);
     refresh(e); gtk_window_present(GTK_WINDOW(e->dialog));
 }
